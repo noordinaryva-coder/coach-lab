@@ -287,7 +287,7 @@ const STAR = [
   "At Risk (low performance, low motivation)",
 ];
 const KPMS = ["AHT", "CSAT", "FCR", "Transfer Rate", "Quality Score", "Sales Conversion", "Hold Time", "Resolution Rate"];
-const BEHAVIOURS = [
+const CASE_BEHAVIOURS = [
   "Long holds / dead air", "Weak empathy and acknowledgement", "Not probing, jumps to solution",
   "Over-explaining, poor call control", "Poor tools utilization",
   "Skipping the recap and next steps", "Compliance / verification shortcuts",
@@ -799,7 +799,7 @@ function CaseStudy({ onCoach }) {
             </div>
             <Field label="Behaviour the transcripts must show">
               <select value={p.behaviour} onChange={(e) => set("behaviour", e.target.value)}>
-                {BEHAVIOURS.map((b) => <option key={b}>{b}</option>)}
+                {CASE_BEHAVIOURS.map((b) => <option key={b}>{b}</option>)}
               </select>
             </Field>
             <div className="cl-actions">
