@@ -1470,51 +1470,66 @@ const PROGRAMS = [
     stds: { aht: 600, fcr: 76, empathy: 3.0, csat: 84, quality: 90 } },
 ];
 
-/* Each scenario: which metric it wants to fail on (first one the program tracks),
-   the three-period shape of that failure as % adverse deviation from standard,
-   and supporting metrics that carry the behavioural evidence. */
+/* ---- behaviours ------------------------------------------------------
+   You coach a BEHAVIOUR. Each one leaves a footprint across the metrics:
+   signed % deviation from standard, in the metric's own direction.
+   The numbers are the consequence, not the thing being coached. */
+const BEHAVIOURS = [
+  { id: "empathy", label: "Empathy and acknowledgement",
+    note: "Resolves correctly but the customer does not feel heard.",
+    footprint: { csat: -15, empathy: -32, quality: -9, aht: 4, fcr: -5 } },
+  { id: "tools", label: "Tools utilization",
+    note: "Not opening the systems that would answer the question.",
+    footprint: { tools: -38, hold: 125, aht: 16, transfer: 95, fcr: -18, frt: 30 } },
+  { id: "probing", label: "Probing and call control",
+    note: "Jumps to a solution before understanding the real need.",
+    footprint: { aht: 20, talk: 19, fcr: -20, recontact: 55, resolution: -15, frt: 18 } },
+  { id: "deadair", label: "Hold procedure and dead air",
+    note: "Long silences and unmanaged holds while searching.",
+    footprint: { hold: 155, aht: 18, csat: -9, acw: 12 } },
+  { id: "recap", label: "Recap and next steps",
+    note: "Ends the contact without confirming what happens next.",
+    footprint: { fcr: -19, recontact: 52, resolution: -13, csat: -8, aht: -7, completion: -9 } },
+  { id: "compliance", label: "Compliance and verification",
+    note: "Skipping required steps, which is why the handle time looks good.",
+    footprint: { compliance: -16, quality: -13, aht: -9, csat: 3 } },
+  { id: "accuracy", label: "Order and transaction accuracy",
+    note: "Gets it done quickly and gets details wrong.",
+    footprint: { completion: -10, recontact: 48, quality: -10, csat: -9, aht: -6 } },
+  { id: "adherence", label: "Adherence and attendance",
+    note: "Not on the floor when the volume is.",
+    footprint: { adherence: -13, csat: -5, quality: -7 } },
+];
+
+/* Each persona supplies the TRAJECTORY — how the footprint plays out over three
+   periods — not which metrics move. That is the behaviour's job. */
 const SHAPES = {
-  carla:  { focusPref: ["compliance", "quality", "completion", "resolution"],
-            shape: [-13, -18, -24], support: { aht: [-9, -10, -11], csat: [5, 7, 6], hold: [-25, -30, -28] },
-            tell: "Fast, low hold, happy customers — she is confident and efficient. Only the required steps are missing, and the gap is widening. Knowledge, not will." },
-  jomar:  { focusPref: ["quality", "compliance", "resolution", "completion"],
-            shape: [1, -20, -1], support: { acw: [-7, 95, 3], aht: [-5, 9, -4], csat: [10, -1, 9] },
-            tell: "ACW nearly doubles in the bad period and drops back. He can hit it — he did, twice. The swing is the topic, not the average." },
-  kevin:  { focusPref: ["aht", "frt", "conversion"],
-            shape: [-2, 1, 18], support: { talk: [-4, -3, 16], hold: [10, -5, 25], transfer: [50, 20, -20], csat: [-18, -10, 0], fcr: [-8, -2, 6] },
-            tell: "The rise is all talk time, while transfers dropped and CSAT reached standard. He stopped passing calls off and started solving them slowly. Reinforce before redirecting." },
-  mila:   { focusPref: ["fcr", "resolution", "completion", "quality"],
-            shape: [-19, -18, -19], support: { recontact: [55, 53, 55], aht: [-4, -5, -3], csat: [-4, -3, -4], hold: [-5, -6, -4] },
-            tell: "Every column flat to within a point across three periods — and she was coached twice inside that window. A perfect flatline after coaching is the agreeable-not-committed signature." },
-  bea:    { focusPref: ["quality"],
-            shape: [-10, -12, -11], support: { compliance: [2, 1, 3], csat: [16, 17, 19], fcr: [9, 12, 11], aht: [-7, -9, -8] },
-            tell: "Compliance above standard, customers delighted, resolving first time, under AHT. Only the subjective QA items are marked down — which is why her objection has teeth." },
-  mae:    { focusPref: ["csat", "empathy", "quality"],
-            shape: [-15, 3, -14], support: { empathy: [-30, 7, -27], fcr: [-6, 4, -5], aht: [-3, 1, -4] },
-            tell: "The middle period proves she can do it — empathy cleared standard and resolution rose with it. Two weeks later both are back down. The skill exists; the reinforcement did not." },
-  dana:   { focusPref: ["transfer", "fcr", "resolution", "completion"],
-            shape: [90, 120, 140], support: { hold: [105, 122, 144], aht: [8, 12, 17], tools: [-32, -36, -40], csat: [-8, -11, -14] },
-            tell: "Tool usage is barely half the team's. The tools she blames are the tools she is not opening — long holds, then a transfer. Everyone has the same tools.",
-            team: true },
-  kiel:   { focusPref: ["csat", "quality", "resolution"],
-            shape: [-9, -8, -10], support: { quality: [-7, -8, -6], aht: [-5, -6, -4], hold: [-8, -10, -6], fcr: [-4, -3, -5] },
-            tell: "Slightly under on everything, dramatically under on nothing. There is no number to open with — which is the point. This one starts with him, not the scorecard." },
-  ramon:  { focusPref: ["aht", "frt"],
-            shape: [13, 21, 28], support: { hold: [111, 150, 189], talk: [3, 6, 8], acw: [-3, -27, -23], csat: [-11, -14, -18], fcr: [-8, -11, -15] },
-            tell: "Hold is nearly three times standard and climbing, while talk barely moves. That is not over-explaining, it is stalling to double-check himself — which matches how he takes feedback." },
-  tris:   { focusPref: ["conversion", "completion", "fcr", "resolution"],
-            shape: [4, -50, -59], support: { csat: [13, 15, 16], quality: [3, 3, 5], aht: [-8, -17, -20] },
-            tell: "He was above standard in June. The collapse starts right after the promotion went elsewhere in July. He stopped trying, he did not get worse." },
-  nadine: { focusPref: ["quality", "csat", "resolution"],
-            shape: [4, -10, -13], support: { csat: [11, -8, -11], empathy: [20, -20, -30], adherence: [3, -4, -7], aht: [-9, 5, 12], acw: [-4, 47, 70] },
-            tell: "Every column moving the wrong way at once, from a strong start, with ACW climbing hard. Uniform decline across unrelated metrics is almost never a skill gap. It is capacity." },
-  aldrin: { focusPref: ["adherence", "quality", "compliance"],
-            shape: [-1, -6, -14], support: { quality: [-2, -7, -12], csat: [3, -3, -8], aht: [-3, -5, -6], acw: [-2, -4, -5] },
-            tell: "Adherence slides first, quality follows, but AHT and ACW never move. He is still perfectly capable — he is just not here. Absences cluster on Tuesdays and Thursdays." },
-  joy:    { focusPref: ["aht", "frt"],
-            shape: [15, 16, 17], support: { hold: [88, 92, 100], acw: [90, 100, 95], csat: [4, 5, 4], talk: [12, 11, 13] },
-            tell: "She sits on the team average on every column, including the two that breach. When the whole LOB fails the same way, the process or the standard is wrong, not the agent.",
-            team: true, teamMatch: true },
+  carla:  { traj: [0.55, 0.8, 1.0],
+            tell: "Everything outside the gap is comfortably fine, and the gap is widening steadily. Confident, efficient, and simply never told where the line is. Knowledge, not will." },
+  jomar:  { traj: [0.1, 1.0, 0.15],
+            tell: "One bad period between two good ones. He can hit it — he did, twice. The swing is the conversation, not the average." },
+  kevin:  { traj: [0.15, 0.35, 1.0], lift: { csat: 14, fcr: 10, transfer: -45 },
+            tell: "The breach appears late, and other metrics improved in the same period. He is trading one thing for another deliberately. Reinforce before you redirect." },
+  mila:   { traj: [0.95, 1.0, 0.97],
+            tell: "Flat to within a point across all three periods — and she was coached twice inside that window. A perfect flatline after coaching is the agreeable-not-committed signature." },
+  bea:    { traj: [1.0, 1.05, 1.0], lift: { csat: 18, fcr: 12, compliance: 3, resolution: 10 },
+            tell: "Customers delighted, resolution strong, compliance above standard. Only the subjective scoring disagrees — which is exactly why her objection has teeth." },
+  mae:    { traj: [1.0, 0.12, 0.95],
+            tell: "The middle period clears standard, then it slides straight back. The skill exists and was demonstrated. What failed was the reinforcement afterwards." },
+  dana:   { traj: [0.7, 0.85, 1.0], team: true,
+            tell: "Roughly double the team on the metrics this behaviour touches. Whatever she blames, everyone else has it too and is not posting these numbers." },
+  kiel:   { traj: [0.42, 0.4, 0.45],
+            tell: "Slightly under, consistently, and dramatically under on nothing. There is no number to open with — which is the point. This one starts with him." },
+  ramon:  { traj: [0.55, 0.8, 1.05],
+            tell: "Worsening in a straight line while he says all the right things about it. He knows, which is part of why the conversation collapses when it comes up." },
+  tris:   { traj: [0.08, 0.8, 1.0], lift: { csat: 14, quality: 4 },
+            tell: "Fine in the first period, then it falls away. Nothing about his capability changed — something in July did. He stopped trying, he did not get worse." },
+  nadine: { traj: [0.1, 0.75, 1.0], spread: -9,
+            tell: "The gap widens and everything else drifts down with it, from a strong start. Uniform decline across unrelated metrics is almost never a skill gap. It is capacity." },
+  aldrin: { traj: [0.15, 0.55, 1.0], spread: -6,
+            tell: "The gap opens first and quality follows it down, but the efficiency numbers never move. Still perfectly capable — just no longer here." },
+  joy:    { traj: [0.95, 1.0, 1.02], team: true, teamMatch: true,
+            tell: "She sits on the team average on every column, including the ones that breach. When the whole LOB fails the same way, the process or the standard is wrong, not the agent." },
 };
 
 const PERIODS = ["Aug 16-31", "Sept 1-15", "Sept 16-30"];
@@ -1538,26 +1553,29 @@ function applyDev(key, std, devPct) {
   return std * (1 + devPct / 100);
 }
 
-function buildScorecard(scenarioId, programId) {
+function buildScorecard(scenarioId, programId, behaviourId) {
   const sh = SHAPES[scenarioId];
   const prog = PROGRAMS.find((x) => x.id === programId);
-  if (!sh || !prog) return null;
-
-  const focus = sh.focusPref.find((k) => prog.tracks.includes(k)) || prog.tracks[0];
-  const devs = {};
-  prog.tracks.forEach((k) => {
-    if (k === focus) devs[k] = sh.shape;
-    else if (sh.support[k]) devs[k] = sh.support[k];
-    else devs[k] = [2, 1, 2];   // quietly fine
-  });
+  const beh = BEHAVIOURS.find((x) => x.id === behaviourId);
+  if (!sh || !prog || !beh) return null;
 
   const cols = ["Pay Period"];
   prog.tracks.forEach((k) => { cols.push(METRICS[k].label); cols.push("Std"); });
 
+  const devAt = (k, i) => {
+    const t = sh.traj[i];
+    let d = 0;
+    if (beh.footprint[k] !== undefined) d += beh.footprint[k] * t;        // the behaviour's cost
+    if (sh.lift && sh.lift[k] !== undefined) d += sh.lift[k] * t;         // what improved alongside
+    if (sh.spread && beh.footprint[k] === undefined) d += sh.spread * t;  // decline bleeding outward
+    if (d === 0) d = 2;                                                   // quietly fine
+    return d;
+  };
+
   const rows = PERIODS.map((per, i) => {
     const r = [per];
     prog.tracks.forEach((k) => {
-      r.push(fmtMetric(k, applyDev(k, prog.stds[k], devs[k][i])));
+      r.push(fmtMetric(k, applyDev(k, prog.stds[k], devAt(k, i))));
       r.push(fmtMetric(k, prog.stds[k]));
     });
     return r;
@@ -1566,20 +1584,28 @@ function buildScorecard(scenarioId, programId) {
   if (sh.team) {
     const r = ["TEAM AVERAGE"];
     prog.tracks.forEach((k) => {
-      const teamDev = sh.teamMatch ? devs[k][2] * 0.97 : (k === focus ? devs[k][2] * 0.28 : devs[k][2] * 0.3);
-      r.push(fmtMetric(k, applyDev(k, prog.stds[k], teamDev)));
+      const d = devAt(k, 2) * (sh.teamMatch ? 0.97 : 0.3);
+      r.push(fmtMetric(k, applyDev(k, prog.stds[k], d)));
       r.push(fmtMetric(k, prog.stds[k]));
     });
     rows.push(r);
   }
 
   const breaches = prog.tracks.filter((k) => {
-    const v = applyDev(k, prog.stds[k], devs[k][2]);
-    return METRICS[k].better === "up" ? v < prog.stds[k] : v > prog.stds[k];
+    const v = applyDev(k, prog.stds[k], devAt(k, 2));
+    return METRICS[k].better === "up" ? v < prog.stds[k] * 0.995 : v > prog.stds[k] * 1.005;
   }).map((k) => METRICS[k].label);
 
-  return { focus: METRICS[focus].label, focusKey: focus, cols, rows,
-           tell: sh.tell, breaches, program: prog };
+  let focusKey = null, worst = 0;
+  prog.tracks.forEach((k) => {
+    const adverse = METRICS[k].better === "up" ? -devAt(k, 2) : devAt(k, 2);
+    if (adverse > worst) { worst = adverse; focusKey = k; }
+  });
+
+  const untouched = prog.tracks.filter((k) => beh.footprint[k] === undefined).map((k) => METRICS[k].label);
+
+  return { cols, rows, breaches, untouched, program: prog, behaviour: beh,
+           focus: focusKey ? METRICS[focusKey].label : null, tell: sh.tell };
 }
 
 const RUBRIC = [
@@ -1607,6 +1633,7 @@ function Practice({ handoff, onClearHandoff }) {
 
   const [agent, setAgent] = useState(handoffAgent || SCENARIOS[0]);
   const [program, setProgram] = useState("tmobile");
+  const [behaviour, setBehaviour] = useState(BEHAVIOURS[0].id);
   const [band, setBand] = useState("all");
   const [cardOpen, setCardOpen] = useState(true);
   const [showTell, setShowTell] = useState(false);
@@ -1627,10 +1654,11 @@ function Practice({ handoff, onClearHandoff }) {
   // The scenario's own scorecard, or the real one handed over from a case study.
   const card = handoff && agent.id === "handoff" && handoff.metrics
     ? { focus: handoff.kpm, cols: handoff.metrics.columns, rows: handoff.metrics.rows,
-        tell: handoff.metrics.story, program: { name: handoff.accountLine } }
-    : buildScorecard(agent.id, program);
-  const topic = card ? card.focus : "performance";
+        tell: handoff.metrics.story, program: { name: handoff.accountLine },
+        behaviour: { label: handoff.behaviour || "the flagged behaviour" }, breaches: [], untouched: [] }
+    : buildScorecard(agent.id, program, behaviour);
   const programName = card && card.program ? card.program.name : "";
+  const topic = card && card.behaviour ? card.behaviour.label : "performance";
 
   const cardText = card
     ? card.cols.join(" | ") + "\n" + card.rows.map((r) => r.join(" | ")).join("\n")
@@ -1696,7 +1724,13 @@ function Practice({ handoff, onClearHandoff }) {
         "figure accurately, that counts as naming something specific about your work and moves you up a level. " +
         "If the coach gets a number wrong, correct them — you would. " +
         "If they ask which metric YOU think you are struggling with, answer at your current level: guarded means " +
-        "naming the safest one or saying you are not sure, engaged means naming the real one.\n"
+        "naming the safest one or saying you are not sure, engaged means naming the real one.\n" +
+        (card && card.untouched && card.untouched.length
+          ? "- These are NOT your problem and you know it: " + card.untouched.join(", ") + ". If the coach raises " +
+            "one of them, say so respectfully with the figure to back it up \u2014 'sorry po, but my " +
+            card.untouched[0] + " is above standard, di ba?' \u2014 and let them correct course. Do not invent a " +
+            "problem you do not have.\n"
+          : "")
       : "") +
 
     (isUncoachable
@@ -1903,7 +1937,7 @@ function Practice({ handoff, onClearHandoff }) {
           <p className="cl-eyebrow cl-mt">Step two</p>
           <h2 className="cl-h2">Pick the account</h2>
           <p className="cl-lede">
-            The account decides which metrics exist. Domino\u2019s tracks order completion and no FCR,
+            The account decides which metrics exist. Domino’s tracks order completion and no FCR,
             because a repeat call is a new order. T-Mobile tracks FCR and transfer rate. Same person,
             different scorecard.
           </p>
@@ -1913,11 +1947,30 @@ function Practice({ handoff, onClearHandoff }) {
                 onClick={() => setProgram(pr.id)}>{pr.name}</button>
             ))}
           </div>
-          {card && card.program && (
+          {card && card.program && <p className="cl-fine">{card.program.note}</p>}
+
+          <p className="cl-eyebrow cl-mt">Step three</p>
+          <h2 className="cl-h2">What behaviour are you coaching?</h2>
+          <p className="cl-lede">
+            Coach the behaviour, not the number. The scorecard rebuilds around whatever you pick,
+            so the metrics you see in the session are the consequence of this behaviour on this account.
+          </p>
+          <div className="cl-behaviours">
+            {BEHAVIOURS.map((b) => (
+              <button key={b.id} className={"cl-beh" + (behaviour === b.id ? " is-on" : "")}
+                onClick={() => setBehaviour(b.id)}>
+                <span className="cl-beh-label">{b.label}</span>
+                <span className="cl-beh-note">{b.note}</span>
+              </button>
+            ))}
+          </div>
+          {card && card.breaches && (
             <p className="cl-fine">
-              {card.program.note} Focus KPM for {agent.name} here: <strong>{card.focus}</strong>.
+              On {programName} this shows up as{" "}
+              <strong>{card.breaches.length ? card.breaches.join(", ") : "no breach \u2014 pick another account"}</strong>.
             </p>
           )}
+
           <div className="cl-actions"><button className="cl-btn cl-go" onClick={begin}>Start the session</button></div>
         </div>
         <aside className="cl-profile">
@@ -1972,7 +2025,7 @@ function Practice({ handoff, onClearHandoff }) {
         {card && (
           <div className="cl-scorecard">
             <button className="cl-sc-toggle" onClick={() => setCardOpen(!cardOpen)}>
-              <span className="cl-eyebrow">{agent.name}\u2019s scorecard</span>
+              <span className="cl-eyebrow">{agent.name}’s scorecard</span>
               <span>Focus KPM: <strong>{card.focus}</strong></span>
               <span className="cl-sc-chev">{cardOpen ? "Hide" : "Show"}</span>
             </button>
@@ -2378,6 +2431,13 @@ const CSS = `
 .cl-chip { background: var(--white); border: 1px solid var(--line); padding: 7px 13px; font-size: 13.5px; }
 .cl-chip:hover { border-color: var(--ink); }
 .cl-chip.is-on { background: var(--red); border-color: var(--red); color: var(--white); }
+.cl-chip.cl-breach:not(.is-on) { border-color: var(--red); color: var(--red-deep); }
+.cl-behaviours { display: grid; grid-template-columns: repeat(auto-fill,minmax(215px,1fr)); gap: 8px; }
+.cl-beh { background: var(--white); border: 1px solid var(--line); border-left: 4px solid var(--line); padding: 11px 13px; text-align: left; }
+.cl-beh:hover { border-color: var(--ink); }
+.cl-beh.is-on { border-color: var(--ink); border-left-color: var(--red); background: var(--red-wash); }
+.cl-beh-label { display: block; font-size: 13.5px; font-weight: 600; }
+.cl-beh-note { display: block; font-size: 11.5px; color: var(--soft); margin-top: 3px; line-height: 1.35; }
 
 .cl-rail { background: var(--white); border: 1px solid var(--line); padding: 18px; }
 .cl-ev { font-size: 11.5px; color: var(--soft); margin: 0 0 5px; padding-left: 9px; border-left: 2px solid var(--line); font-style: italic; }
