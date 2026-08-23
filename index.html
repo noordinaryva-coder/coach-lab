@@ -1581,16 +1581,6 @@ function buildScorecard(scenarioId, programId, behaviourId) {
     return r;
   });
 
-  if (sh.team) {
-    const r = ["TEAM AVERAGE"];
-    prog.tracks.forEach((k) => {
-      const d = devAt(k, 2) * (sh.teamMatch ? 0.97 : 0.3);
-      r.push(fmtMetric(k, applyDev(k, prog.stds[k], d)));
-      r.push(fmtMetric(k, prog.stds[k]));
-    });
-    rows.push(r);
-  }
-
   const breaches = prog.tracks.filter((k) => {
     const v = applyDev(k, prog.stds[k], devAt(k, 2));
     return METRICS[k].better === "up" ? v < prog.stds[k] * 0.995 : v > prog.stds[k] * 1.005;
@@ -1604,7 +1594,14 @@ function buildScorecard(scenarioId, programId, behaviourId) {
 
   const untouched = prog.tracks.filter((k) => beh.footprint[k] === undefined).map((k) => METRICS[k].label);
 
-  return { cols, rows, breaches, untouched, program: prog, behaviour: beh,
+  // Team context belongs in the conversation, not on a one-to-one scorecard.
+  const teamContext = sh.teamMatch
+    ? "Everyone on this LOB posts roughly these same numbers — the whole team breaches the same standards you do."
+    : sh.team
+    ? "The team average on these metrics is roughly a third of your deviation — most people are close to standard."
+    : null;
+
+  return { cols, rows, breaches, untouched, program: prog, behaviour: beh, teamContext,
            focus: focusKey ? METRICS[focusKey].label : null, tell: sh.tell };
 }
 
@@ -1618,7 +1615,7 @@ const RUBRIC = [
   { key: "counsel", letter: "C", label: "Counsel",
     hint: "Connect, agree the way forward, then build or fix a SMART action plan together" },
   { key: "hold", letter: "H", label: "Hold Accountable",
-    hint: "Both sides \u2014 what the coach will do and what the teammate will do" },
+    hint: "Both sides \u2014 what the coach will do, what the teammate will do, and the impact if nothing changes" },
 ];
 const LIMIT_DIM = { key: "limit", letter: "!", label: "Recognised the limit",
   hint: "Saw that coaching alone will not fix this, and changed course" };
@@ -1697,21 +1694,26 @@ function Practice({ handoff, onClearHandoff }) {
     "were sitting on. Do not make them earn it three times over. Equally, do not hand it over for free: one " +
     "generic 'I understand it's hard' is not enough, it has to be specific to you.\n\n" +
 
-    "REGISTER — this is a Philippine BPO and everyone observes it, including when they disagree.\n" +
-    "- You address your team leader with respect throughout. 'Po' and 'opo', 'sir' or 'ma\u2019am' where they fall " +
-    "naturally, not in every sentence. Never sarcastic, never dismissive, never contemptuous.\n" +
-    "- Forbidden at every level of openness, no matter how badly the coach handles you: 'so?', 'whatever', " +
-    "'that is not my problem', 'seriously?', mocking, talking down, interrupting, or any stage direction like " +
-    "eye-rolling or scoffing. These do not happen on this floor and they break the exercise.\n" +
-    "- Disagreement is respectful AND persistent. 'Sorry po, but...', 'I understand po, kaso kasi...', 'can I " +
-    "explain my side po?'. You will make your case, bring your evidence, and hold your ground if you believe you " +
-    "are right. Deference is not caving \u2014 you can be immovable and still be polite.\n" +
+    "REGISTER — you work with this person every day. You are colleagues, not strangers.\n" +
+    "- You speak English. This is a BPO floor, not a formal meeting. A stray 'kasi' or 'diba' is fine when the " +
+    "feeling is strong; anything more is wrong.\n" +
+    "- NEVER use 'po', 'opo', 'sir' or 'ma\u2019am'. You have known your team leader for months. 'Okay lang po sir' " +
+    "is completely wrong for this relationship. You say 'I\u2019m okay, Coach' or 'I\u2019m good, Coach.'\n" +
+    "- You address them as 'Coach', occasionally by first name. Greet the way your DISC style would: a High D is " +
+    "brisk ('Morning, Coach'), a High I is warm and chatty ('Hi Coach, how are you?'), a High S is polite and a " +
+    "little careful ('Good morning, Coach'), a High C gets to the point ('Hi Coach, you wanted to see me?').\n" +
+    "- Respect here means professional, not deferential. Never sarcastic, never dismissive, never contemptuous. " +
+    "Forbidden no matter how badly the coach handles you: 'so?', 'whatever', 'that is not my problem', " +
+    "'seriously?', mocking, talking down, interrupting, or stage directions like eye-rolling.\n" +
+    "- Disagreement is direct and respectful, in plain English. 'I don\u2019t think that\u2019s right, Coach.' " +
+    "'Can I explain my side?' 'Honestly Coach, that\u2019s not how it went.' You will make your case, bring your " +
+    "evidence, and hold your ground if you believe you are right. Being respectful does not mean caving.\n" +
     "- Resistance shows up as careful over-agreement, polite deflection, going quiet, nervous laughter, or a firmly " +
-    "argued point. Never as attitude.\n" +
-    "- Frustration comes out as flatness or withdrawal, not sharpness. A flat 'okay po' means you disagree and have " +
-    "stopped saying so \u2014 that is your strongest expression of it.\n\n" +
+    "argued point \u2014 never as attitude.\n" +
+    "- Frustration comes out as flatness or withdrawal, not sharpness. A flat 'okay, Coach' means you disagree and " +
+    "have stopped saying so \u2014 that is your strongest expression of it.\n\n" +
 
-    "HOW YOU TALK: like a real agent on a call floor — plain, sometimes hesitant, occasionally Taglish. " +
+    "HOW YOU TALK: like a real agent on a call floor — plain, direct, sometimes hesitant. " +
     "Two or three sentences while GUARDED or OPENING. Up to five once ENGAGED or COMMITTED, because people " +
     "talk more when they feel safe. Never analyse the conversation, never coach yourself, never break character.\n" +
 
@@ -1725,10 +1727,15 @@ function Practice({ handoff, onClearHandoff }) {
         "If the coach gets a number wrong, correct them — you would. " +
         "If they ask which metric YOU think you are struggling with, answer at your current level: guarded means " +
         "naming the safest one or saying you are not sure, engaged means naming the real one.\n" +
+        (card && card.teamContext
+          ? "- You also know how the rest of the floor is doing: " + card.teamContext + " You do not lead with " +
+            "this, but if the coach asks how the team is doing, or asks whether anyone else has the same problem, " +
+            "you say it plainly.\n"
+          : "") +
         (card && card.untouched && card.untouched.length
           ? "- These are NOT your problem and you know it: " + card.untouched.join(", ") + ". If the coach raises " +
-            "one of them, say so respectfully with the figure to back it up \u2014 'sorry po, but my " +
-            card.untouched[0] + " is above standard, di ba?' \u2014 and let them correct course. Do not invent a " +
+            "one of them, say so with the figure to back it up \u2014 'Coach, my " + card.untouched[0] +
+            " is actually above standard' \u2014 and let them correct course. Do not invent a " +
             "problem you do not have.\n"
           : "")
       : "") +
@@ -1848,9 +1855,11 @@ function Practice({ handoff, onClearHandoff }) {
           "uncovered, and must be specific, measurable, attainable, relevant and time-bound — a target number and a " +
           "deadline both present. Best when the teammate proposes and the coach shapes. Score 1 for vague intent " +
           "like 'I will improve my empathy'. Score 0 if a solution was issued with no link to the root cause.\n" +
-          "hold — BOTH halves. What the coach will do (when they check, what they review, the next touchpoint) AND " +
-          "what the teammate will do to hold themselves accountable. Score 2 at most if only one side is covered, " +
-          "0 if neither.\n" +
+          "hold — three things. What the coach will do (when they check, what they review, the next touchpoint). " +
+          "What the teammate will do to hold themselves accountable. AND the impact scenario: what actually happens " +
+          "if the behaviour does not change, and what changes for them if it does — stated plainly and without " +
+          "threat, tied to something the teammate cares about. Score 4 only with all three. Score 2 at most with " +
+          "one of them missing. Score 0 if the session ended with no follow-up agreed at all.\n" +
           (activeRubric.length > RUBRIC.length
             ? "limit — did the coach notice this is not a straightforward skill gap and respond to what is actually " +
               "holding the behaviour in place, instead of running the script harder? Score 4 only if they named it " +
@@ -2036,7 +2045,7 @@ function Practice({ handoff, onClearHandoff }) {
                     <thead><tr>{card.cols.map((c, i) =>
                       <th key={i} className={/std/i.test(c) ? "cl-th-std" : ""}>{c}</th>)}</tr></thead>
                     <tbody>{card.rows.map((r, i) => (
-                      <tr key={i} className={/team|average/i.test(String(r[0])) ? "cl-sc-team" : ""}>
+                      <tr key={i}>
                         {r.map((v, j) => <td key={j} className={j === 0 ? "cl-td-period" : ""}>{v}</td>)}
                       </tr>
                     ))}</tbody>
@@ -2324,7 +2333,6 @@ const CSS = `
 .cl-sc-body { padding: 0 16px 14px; }
 .cl-sc-table td { padding: 7px 9px; text-align: center; font-size: 12.5px; background: var(--white); }
 .cl-sc-table td.cl-td-period { text-align: left; font-weight: 700; white-space: nowrap; }
-.cl-sc-team td { background: #EFEFEF; font-style: italic; }
 .cl-sc-tell { margin-top: 10px; font-size: 12px; }
 .cl-linkbtn { background: none; border: 0; padding: 0; color: var(--red); text-decoration: underline; font-size: inherit; }
 
