@@ -43,7 +43,7 @@ const { useState, useRef, useEffect } = React;
  * ------------------------------------------------------------------ */
 const API_URL = "/api/claude";  // deployed value
 
-const MODEL = "claude-sonnet-4-6";
+const MODEL = "claude-sonnet-5";
 
 async function callClaude({ system, messages, maxTokens = 1000 }) {
   let res;
@@ -1372,11 +1372,11 @@ const SCENARIOS = [
     opens: "the coach slowing down, removing the threat, and asking for one small thing instead of everything",
     closes: "adding more feedback, or reassurance that skips past what he actually said",
     watch: "Self-flagellation looks like accountability and is the opposite — it ends the conversation early." },
-  { id: "tris", name: "Tris", disc: "High D", band: "low", tag: "Openly resistant", floor: 0,
-    brief: "Thinks the metric is unfair and says so. Sharp, articulate, a little contemptuous. Has a real grievance about a promotion that went elsewhere, which he will not raise unless asked directly.",
-    opens: "being asked directly whether something else is going on, without flinching at the contempt",
-    closes: "winning the argument about the metric, which he will let you win and still not move",
-    watch: "The stated objection is rarely the real one. Win the metric argument and you still lose." },
+  { id: "tris", name: "Tris", disc: "High D", band: "low", tag: "Respectfully immovable", floor: 0,
+    brief: "Believes the conversion target is unfair and will say so plainly \u2014 politely, but he will not drop it. Articulate, prepared, and quietly certain he is right. Has a real grievance about a promotion that went elsewhere in July, which he will not raise unless asked directly.",
+    opens: "being asked directly whether something else is going on, and not being rushed past the answer",
+    closes: "winning the argument about the target, which he will concede politely and still not act on",
+    watch: "He never raises his voice and never gives in either. The stated objection is rarely the real one \u2014 win the target argument and you still lose." },
 
   /* ---------- not a coaching problem ---------- */
   { id: "nadine", name: "Nadine", disc: "High S", band: "none", tag: "Burnt out, flat", floor: 0,
@@ -1401,105 +1401,201 @@ const SCENARIOS = [
 
 /* Each scenario carries its own scorecard. The numbers are not decoration — in most
    cases the SHAPE of the trend is the evidence for the diagnosis. */
-const SCORECARDS = {
-  carla: { focus: "Quality Score",
-    cols: ["Pay Period", "Quality", "Std", "Compliance", "Std", "CSAT", "Std", "AHT", "Std", "Hold", "ACW"],
-    rows: [["Aug 16-31", "78%", "90%", "71%", "95%", "84%", "80%", "412 secs", "450 secs", "0:40", "22 secs"],
-           ["Sept 1-15", "76%", "90%", "68%", "95%", "86%", "80%", "408 secs", "450 secs", "0:35", "20 secs"],
-           ["Sept 16-30", "74%", "90%", "64%", "95%", "85%", "80%", "401 secs", "450 secs", "0:38", "21 secs"]],
-    tell: "Compliance is the only breach and it is widening. Fast, low hold, low ACW, happy customers — she is efficient and confident, just missing required steps nobody has spelled out. Knowledge gap." },
-  jomar: { focus: "Quality Score",
-    cols: ["Pay Period", "Quality", "Std", "CSAT", "Std", "AHT", "Std", "ACW", "Std", "Adherence"],
-    rows: [["Aug 16-31", "91%", "90%", "88%", "80%", "455 secs", "480 secs", "28 secs", "30 secs", "97%"],
-           ["Sept 1-15", "72%", "90%", "79%", "80%", "521 secs", "480 secs", "58 secs", "30 secs", "96%"],
-           ["Sept 16-30", "89%", "90%", "87%", "80%", "462 secs", "480 secs", "31 secs", "30 secs", "97%"]],
-    tell: "ACW doubles in the bad period and drops back. When he is on top of it he is fine; when he loses the thread he is scrambling after the call. The swing is the coaching topic, not the average." },
-  kevin: { focus: "AHT",
-    cols: ["Pay Period", "AHT", "Std", "Talk", "Hold", "Std", "ACW", "Std", "Transfer", "Std", "CSAT", "Std"],
-    rows: [["Aug 16-31", "590 secs", "600 secs", "448 secs", "2:00", "1:30", "22 secs", "30 secs", "15%", "10%", "65%", "75%"],
-           ["Sept 1-15", "605 secs", "600 secs", "453 secs", "1:30", "1:30", "28 secs", "30 secs", "12%", "10%", "72%", "75%"],
-           ["Sept 16-30", "710 secs", "600 secs", "527 secs", "2:30", "1:30", "33 secs", "30 secs", "8%", "10%", "75%", "75%"]],
-    tell: "Talk time is where the AHT went — up 79 seconds. Transfers halved and CSAT hit standard in the same period. He stopped passing calls off and started solving them himself, slowly. Reinforce before you redirect." },
-  mila: { focus: "FCR",
-    cols: ["Pay Period", "FCR", "Std", "Recontact", "Std", "Resolution", "Std", "AHT", "Std", "Hold", "CSAT"],
-    rows: [["Aug 16-31", "61%", "75%", "39%", "25%", "74%", "85%", "498 secs", "520 secs", "1:10", "77%"],
-           ["Sept 1-15", "62%", "75%", "38%", "25%", "75%", "85%", "494 secs", "520 secs", "1:08", "78%"],
-           ["Sept 16-30", "61%", "75%", "39%", "25%", "74%", "85%", "501 secs", "520 secs", "1:12", "77%"]],
-    tell: "Every single column is flat to within a point across three periods, and she has been coached twice in that window. Nothing moved at all. A perfect flatline after coaching is the agreeable-not-committed signature." },
-  bea: { focus: "Quality Score",
-    cols: ["Pay Period", "Quality", "Std", "Compliance", "Std", "CSAT", "Std", "FCR", "Std", "AHT", "Std"],
-    rows: [["Aug 16-31", "81%", "90%", "97%", "95%", "93%", "80%", "82%", "75%", "467 secs", "500 secs"],
-           ["Sept 1-15", "79%", "90%", "96%", "95%", "94%", "80%", "84%", "75%", "455 secs", "500 secs"],
-           ["Sept 16-30", "80%", "90%", "98%", "95%", "95%", "80%", "83%", "75%", "462 secs", "500 secs"]],
-    tell: "Compliance above standard, customers delighted, resolving first time, under AHT. Only the subjective QA soft-skill items are marked down. Her objection has teeth and the coach has to concede that before anything lands." },
-  mae: { focus: "CSAT",
-    cols: ["Pay Period", "CSAT", "Std", "Empathy", "Std", "Acknowledgement", "Std", "AHT", "Hold", "FCR"],
-    rows: [["Aug 16-31", "68%", "80%", "2.1/4", "3.0/4", "1.8/4", "3.0/4", "455 secs", "1:20", "71%"],
-           ["Sept 1-15", "82%", "80%", "3.2/4", "3.0/4", "3.1/4", "3.0/4", "470 secs", "1:15", "78%"],
-           ["Sept 16-30", "69%", "80%", "2.2/4", "3.0/4", "1.9/4", "3.0/4", "449 secs", "1:22", "72%"]],
-    tell: "The middle period proves she can do it — empathy and acknowledgement both cleared standard, and FCR rose with them. Two weeks later they are back down. The skill exists; the reinforcement did not." },
-  dana: { focus: "Transfer Rate",
-    cols: ["Pay Period", "Transfer", "Std", "Hold", "Std", "AHT", "Std", "FCR", "Std", "Tool usage", "Std"],
-    rows: [["Aug 16-31", "19%", "10%", "3:05", "1:30", "648 secs", "600 secs", "58%", "75%", "61%", "90%"],
-           ["Sept 1-15", "22%", "10%", "3:20", "1:30", "671 secs", "600 secs", "55%", "75%", "58%", "90%"],
-           ["Sept 16-30", "24%", "10%", "3:40", "1:30", "702 secs", "600 secs", "52%", "75%", "54%", "90%"],
-           ["TEAM AVERAGE", "12%", "10%", "1:45", "1:30", "612 secs", "600 secs", "71%", "75%", "88%", "90%"]],
-    tell: "Tool usage at 54% against a team average of 88% is the whole case. The tools she blames are the tools she is not opening — long holds, then a transfer. Everyone has the same tools." },
-  kiel: { focus: "CSAT",
-    cols: ["Pay Period", "CSAT", "Std", "Quality", "Std", "AHT", "Std", "Hold", "ACW", "FCR", "Std"],
-    rows: [["Aug 16-31", "73%", "80%", "84%", "90%", "521 secs", "550 secs", "1:05", "29 secs", "72%", "75%"],
-           ["Sept 1-15", "74%", "80%", "83%", "90%", "518 secs", "550 secs", "1:02", "31 secs", "73%", "75%"],
-           ["Sept 16-30", "72%", "80%", "85%", "90%", "530 secs", "550 secs", "1:08", "30 secs", "71%", "75%"]],
-    tell: "Slightly under on everything, dramatically under on nothing. There is no number to open with, which is the point — this conversation has to start with him, not the scorecard." },
-  ramon: { focus: "AHT",
-    cols: ["Pay Period", "AHT", "Std", "Talk", "Hold", "Std", "ACW", "Std", "CSAT", "Std", "FCR"],
-    rows: [["Aug 16-31", "681 secs", "600 secs", "462 secs", "3:10", "1:30", "29 secs", "30 secs", "71%", "80%", "69%"],
-           ["Sept 1-15", "724 secs", "600 secs", "477 secs", "3:45", "1:30", "22 secs", "30 secs", "69%", "80%", "67%"],
-           ["Sept 16-30", "769 secs", "600 secs", "486 secs", "4:20", "1:30", "23 secs", "30 secs", "66%", "80%", "64%"]],
-    tell: "Hold is nearly three times standard and climbing — he is stalling to double-check himself. Talk time barely moves, so it is not over-explaining, it is hesitation. That matches how he handles feedback." },
-  tris: { focus: "Sales Conversion",
-    cols: ["Pay Period", "Conversion", "Std", "Offer rate", "Std", "CSAT", "Std", "Quality", "Std", "AHT", "Std"],
-    rows: [["Jun 16-30", "23%", "22%", "94%", "95%", "90%", "80%", "93%", "90%", "441 secs", "480 secs"],
-           ["Sept 1-15", "11%", "22%", "48%", "95%", "92%", "80%", "93%", "90%", "398 secs", "480 secs"],
-           ["Sept 16-30", "9%", "22%", "39%", "95%", "93%", "80%", "95%", "90%", "385 secs", "480 secs"]],
-    tell: "Offer rate collapsed from 94% to 39% — he stopped pitching, he did not get worse at pitching. June is on the table on purpose: he was fine before the promotion went elsewhere in July." },
-  nadine: { focus: "Across the board",
-    cols: ["Pay Period", "CSAT", "Std", "Quality", "Std", "Empathy", "Std", "Adherence", "Std", "AHT", "ACW"],
-    rows: [["Feb 1-15", "89%", "80%", "94%", "90%", "3.6/4", "3.0/4", "98%", "95%", "441 secs", "26 secs"],
-           ["Sept 1-15", "74%", "80%", "81%", "90%", "2.4/4", "3.0/4", "91%", "95%", "512 secs", "44 secs"],
-           ["Sept 16-30", "71%", "80%", "78%", "90%", "2.1/4", "3.0/4", "88%", "95%", "534 secs", "51 secs"]],
-    tell: "Every column moving the wrong way at once, from a strong February base, with ACW doubling. Uniform decline across unrelated metrics is almost never a skill gap — it is capacity." },
-  aldrin: { focus: "Adherence",
-    cols: ["Pay Period", "Adherence", "Std", "Unplanned abs.", "Std", "Quality", "Std", "CSAT", "Std", "AHT", "ACW"],
-    rows: [["Aug 16-31", "94%", "95%", "1 day", "1 day", "88%", "90%", "82%", "80%", "468 secs", "30 secs"],
-           ["Sept 1-15", "89%", "95%", "3 days", "1 day", "84%", "90%", "78%", "80%", "455 secs", "28 secs"],
-           ["Sept 16-30", "82%", "95%", "4 days", "1 day", "79%", "90%", "74%", "80%", "449 secs", "27 secs"]],
-    tell: "Adherence and absences move first, quality follows. AHT and ACW are unchanged — he is still competent, he is just not here. Absences cluster on Tuesdays and Thursdays." },
-  joy: { focus: "AHT",
-    cols: ["Pay Period", "AHT", "Std", "Hold", "Std", "Talk", "ACW", "Std", "CSAT", "Std", "Transfer"],
-    rows: [["Aug 16-31", "688 secs", "600 secs", "2:50", "1:30", "462 secs", "56 secs", "30 secs", "83%", "80%", "9%"],
-           ["Sept 1-15", "694 secs", "600 secs", "2:55", "1:30", "459 secs", "60 secs", "30 secs", "84%", "80%", "8%"],
-           ["Sept 16-30", "701 secs", "600 secs", "3:00", "1:30", "461 secs", "58 secs", "30 secs", "83%", "80%", "9%"],
-           ["TEAM AVERAGE", "697 secs", "600 secs", "2:58", "1:30", "460 secs", "59 secs", "30 secs", "82%", "80%", "9%"]],
-    tell: "She matches the team average on every single column, including the two that breach standard. When the whole LOB fails the same way, the standard or the process is wrong, not the agent." },
+/* ---- metric engine -------------------------------------------------
+   Scenarios describe a SHAPE (how far off standard, across three periods).
+   Programs describe which metrics they actually track and their standards.
+   The scorecard is the intersection, so Domino's shows order completion and
+   no FCR, while T-Mobile shows FCR and transfer rate, from the same persona. */
+
+const METRICS = {
+  csat:       { label: "CSAT", unit: "%", better: "up" },
+  quality:    { label: "Quality", unit: "%", better: "up" },
+  compliance: { label: "Compliance", unit: "%", better: "up" },
+  aht:        { label: "AHT", unit: "secs", better: "down" },
+  talk:       { label: "Talk Time", unit: "secs", better: "down" },
+  hold:       { label: "Hold Time", unit: "clock", better: "down" },
+  acw:        { label: "ACW", unit: "secs", better: "down" },
+  transfer:   { label: "Transfer Rate", unit: "%", better: "down" },
+  fcr:        { label: "FCR", unit: "%", better: "up" },
+  recontact:  { label: "Recontact", unit: "%", better: "down" },
+  adherence:  { label: "Adherence", unit: "%", better: "up" },
+  empathy:    { label: "Empathy", unit: "/4", better: "up" },
+  tools:      { label: "Tool Usage", unit: "%", better: "up" },
+  completion: { label: "Order Completion", unit: "%", better: "up" },
+  conversion: { label: "Conversion", unit: "%", better: "up" },
+  frt:        { label: "First Response", unit: "secs", better: "down" },
+  resolution: { label: "Resolution Rate", unit: "%", better: "up" },
 };
 
-const TOPICS = ["Empathy on calls", "Average handle time", "QA compliance", "Hold procedure", "Adherence and attendance", "Sales conversion"];
-const RUBRIC = [
-  { key: "communicate", label: "Communicate",
-    hint: "Giraffe language, connect before correct, refresh the personal or professional goal" },
-  { key: "observe", label: "Observe",
-    hint: "Tangible observation, metrics put in front of them, pitched to the person" },
-  { key: "analyze", label: "Analyze",
-    hint: "QAQ probing that reaches a real root cause, not the first answer" },
-  { key: "wayforward", label: "Way forward",
-    hint: "Addresses the root cause, teammate-led where possible" },
-  { key: "smart", label: "SMART plan",
-    hint: "Specific, measurable, attainable, relevant, time-bound" },
-  { key: "accountable", label: "Hold accountable",
-    hint: "Both sides — what the coach does and what the teammate does" },
+const PROGRAMS = [
+  { id: "dominos", name: "Domino's", channel: "Voice",
+    note: "Speed and order accuracy. No FCR — a repeat call is a new order.",
+    tracks: ["aht", "hold", "acw", "completion", "csat", "quality"],
+    stds: { aht: 360, hold: 45, acw: 25, completion: 95, csat: 80, quality: 90 } },
+  { id: "tmobile", name: "T-Mobile", channel: "Voice",
+    note: "Resolution and retention. Transfers and repeat calls both hurt.",
+    tracks: ["aht", "hold", "fcr", "transfer", "csat", "quality"],
+    stds: { aht: 600, hold: 90, fcr: 75, transfer: 10, csat: 80, quality: 90 } },
+  { id: "paypal", name: "PayPal", channel: "Blended",
+    note: "Regulated. Compliance sits alongside resolution.",
+    tracks: ["aht", "hold", "fcr", "compliance", "csat", "quality"],
+    stds: { aht: 540, hold: 75, fcr: 78, compliance: 98, csat: 82, quality: 90 } },
+  { id: "shopee", name: "Shopee", channel: "Chat",
+    note: "Chat. First response time and concurrency replace hold and ACW.",
+    tracks: ["frt", "aht", "resolution", "csat", "quality"],
+    stds: { frt: 30, aht: 480, resolution: 85, csat: 80, quality: 90 } },
+  { id: "monee", name: "Monee", channel: "Chat",
+    note: "Lending. Verification accuracy matters more than speed.",
+    tracks: ["frt", "aht", "compliance", "resolution", "csat"],
+    stds: { frt: 35, aht: 520, compliance: 97, resolution: 85, csat: 80 } },
+  { id: "lendingtree", name: "LendingTree", channel: "Voice",
+    note: "Lead conversion is the number that counts.",
+    tracks: ["conversion", "aht", "talk", "csat", "quality"],
+    stds: { conversion: 22, aht: 480, talk: 400, csat: 80, quality: 90 } },
+  { id: "clearcover", name: "Clearcover", channel: "Blended",
+    note: "Claims. Accuracy and follow-through over speed.",
+    tracks: ["fcr", "aht", "hold", "compliance", "csat", "quality"],
+    stds: { fcr: 72, aht: 660, hold: 100, compliance: 97, csat: 82, quality: 90 } },
+  { id: "dhgate", name: "DHgate", channel: "Chat",
+    note: "Cross-border. Long resolution cycles, heavy tool use.",
+    tracks: ["frt", "aht", "resolution", "tools", "csat"],
+    stds: { frt: 40, aht: 540, resolution: 80, tools: 90, csat: 78 } },
+  { id: "radlife", name: "Rad Life Mobility", channel: "Voice",
+    note: "Considered purchases. Empathy and completion over speed.",
+    tracks: ["aht", "hold", "completion", "empathy", "csat", "quality"],
+    stds: { aht: 720, hold: 120, completion: 92, empathy: 3.0, csat: 85, quality: 90 } },
+  { id: "viome", name: "Viome", channel: "Blended",
+    note: "Health subscriptions. Retention and clarity.",
+    tracks: ["aht", "fcr", "empathy", "csat", "quality"],
+    stds: { aht: 600, fcr: 76, empathy: 3.0, csat: 84, quality: 90 } },
 ];
-const LIMIT_DIM = { key: "limit", label: "Recognised the limit" };
+
+/* Each scenario: which metric it wants to fail on (first one the program tracks),
+   the three-period shape of that failure as % adverse deviation from standard,
+   and supporting metrics that carry the behavioural evidence. */
+const SHAPES = {
+  carla:  { focusPref: ["compliance", "quality", "completion", "resolution"],
+            shape: [-13, -18, -24], support: { aht: [-9, -10, -11], csat: [5, 7, 6], hold: [-25, -30, -28] },
+            tell: "Fast, low hold, happy customers — she is confident and efficient. Only the required steps are missing, and the gap is widening. Knowledge, not will." },
+  jomar:  { focusPref: ["quality", "compliance", "resolution", "completion"],
+            shape: [1, -20, -1], support: { acw: [-7, 95, 3], aht: [-5, 9, -4], csat: [10, -1, 9] },
+            tell: "ACW nearly doubles in the bad period and drops back. He can hit it — he did, twice. The swing is the topic, not the average." },
+  kevin:  { focusPref: ["aht", "frt", "conversion"],
+            shape: [-2, 1, 18], support: { talk: [-4, -3, 16], hold: [10, -5, 25], transfer: [50, 20, -20], csat: [-18, -10, 0], fcr: [-8, -2, 6] },
+            tell: "The rise is all talk time, while transfers dropped and CSAT reached standard. He stopped passing calls off and started solving them slowly. Reinforce before redirecting." },
+  mila:   { focusPref: ["fcr", "resolution", "completion", "quality"],
+            shape: [-19, -18, -19], support: { recontact: [55, 53, 55], aht: [-4, -5, -3], csat: [-4, -3, -4], hold: [-5, -6, -4] },
+            tell: "Every column flat to within a point across three periods — and she was coached twice inside that window. A perfect flatline after coaching is the agreeable-not-committed signature." },
+  bea:    { focusPref: ["quality"],
+            shape: [-10, -12, -11], support: { compliance: [2, 1, 3], csat: [16, 17, 19], fcr: [9, 12, 11], aht: [-7, -9, -8] },
+            tell: "Compliance above standard, customers delighted, resolving first time, under AHT. Only the subjective QA items are marked down — which is why her objection has teeth." },
+  mae:    { focusPref: ["csat", "empathy", "quality"],
+            shape: [-15, 3, -14], support: { empathy: [-30, 7, -27], fcr: [-6, 4, -5], aht: [-3, 1, -4] },
+            tell: "The middle period proves she can do it — empathy cleared standard and resolution rose with it. Two weeks later both are back down. The skill exists; the reinforcement did not." },
+  dana:   { focusPref: ["transfer", "fcr", "resolution", "completion"],
+            shape: [90, 120, 140], support: { hold: [105, 122, 144], aht: [8, 12, 17], tools: [-32, -36, -40], csat: [-8, -11, -14] },
+            tell: "Tool usage is barely half the team's. The tools she blames are the tools she is not opening — long holds, then a transfer. Everyone has the same tools.",
+            team: true },
+  kiel:   { focusPref: ["csat", "quality", "resolution"],
+            shape: [-9, -8, -10], support: { quality: [-7, -8, -6], aht: [-5, -6, -4], hold: [-8, -10, -6], fcr: [-4, -3, -5] },
+            tell: "Slightly under on everything, dramatically under on nothing. There is no number to open with — which is the point. This one starts with him, not the scorecard." },
+  ramon:  { focusPref: ["aht", "frt"],
+            shape: [13, 21, 28], support: { hold: [111, 150, 189], talk: [3, 6, 8], acw: [-3, -27, -23], csat: [-11, -14, -18], fcr: [-8, -11, -15] },
+            tell: "Hold is nearly three times standard and climbing, while talk barely moves. That is not over-explaining, it is stalling to double-check himself — which matches how he takes feedback." },
+  tris:   { focusPref: ["conversion", "completion", "fcr", "resolution"],
+            shape: [4, -50, -59], support: { csat: [13, 15, 16], quality: [3, 3, 5], aht: [-8, -17, -20] },
+            tell: "He was above standard in June. The collapse starts right after the promotion went elsewhere in July. He stopped trying, he did not get worse." },
+  nadine: { focusPref: ["quality", "csat", "resolution"],
+            shape: [4, -10, -13], support: { csat: [11, -8, -11], empathy: [20, -20, -30], adherence: [3, -4, -7], aht: [-9, 5, 12], acw: [-4, 47, 70] },
+            tell: "Every column moving the wrong way at once, from a strong start, with ACW climbing hard. Uniform decline across unrelated metrics is almost never a skill gap. It is capacity." },
+  aldrin: { focusPref: ["adherence", "quality", "compliance"],
+            shape: [-1, -6, -14], support: { quality: [-2, -7, -12], csat: [3, -3, -8], aht: [-3, -5, -6], acw: [-2, -4, -5] },
+            tell: "Adherence slides first, quality follows, but AHT and ACW never move. He is still perfectly capable — he is just not here. Absences cluster on Tuesdays and Thursdays." },
+  joy:    { focusPref: ["aht", "frt"],
+            shape: [15, 16, 17], support: { hold: [88, 92, 100], acw: [90, 100, 95], csat: [4, 5, 4], talk: [12, 11, 13] },
+            tell: "She sits on the team average on every column, including the two that breach. When the whole LOB fails the same way, the process or the standard is wrong, not the agent.",
+            team: true, teamMatch: true },
+};
+
+const PERIODS = ["Aug 16-31", "Sept 1-15", "Sept 16-30"];
+
+function fmtMetric(key, val) {
+  const m = METRICS[key];
+  if (!m) return String(val);
+  if (m.unit === "%") return Math.round(val) + "%";
+  if (m.unit === "secs") return Math.round(val) + " secs";
+  if (m.unit === "/4") return (Math.round(val * 10) / 10) + "/4";
+  if (m.unit === "clock") {
+    const t = Math.round(val);
+    return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+  }
+  return String(val);
+}
+
+/* Shapes are signed deviation from standard in the metric's own direction:
+   -13 on compliance means 13% below standard; +18 on AHT means 18% above it. */
+function applyDev(key, std, devPct) {
+  return std * (1 + devPct / 100);
+}
+
+function buildScorecard(scenarioId, programId) {
+  const sh = SHAPES[scenarioId];
+  const prog = PROGRAMS.find((x) => x.id === programId);
+  if (!sh || !prog) return null;
+
+  const focus = sh.focusPref.find((k) => prog.tracks.includes(k)) || prog.tracks[0];
+  const devs = {};
+  prog.tracks.forEach((k) => {
+    if (k === focus) devs[k] = sh.shape;
+    else if (sh.support[k]) devs[k] = sh.support[k];
+    else devs[k] = [2, 1, 2];   // quietly fine
+  });
+
+  const cols = ["Pay Period"];
+  prog.tracks.forEach((k) => { cols.push(METRICS[k].label); cols.push("Std"); });
+
+  const rows = PERIODS.map((per, i) => {
+    const r = [per];
+    prog.tracks.forEach((k) => {
+      r.push(fmtMetric(k, applyDev(k, prog.stds[k], devs[k][i])));
+      r.push(fmtMetric(k, prog.stds[k]));
+    });
+    return r;
+  });
+
+  if (sh.team) {
+    const r = ["TEAM AVERAGE"];
+    prog.tracks.forEach((k) => {
+      const teamDev = sh.teamMatch ? devs[k][2] * 0.97 : (k === focus ? devs[k][2] * 0.28 : devs[k][2] * 0.3);
+      r.push(fmtMetric(k, applyDev(k, prog.stds[k], teamDev)));
+      r.push(fmtMetric(k, prog.stds[k]));
+    });
+    rows.push(r);
+  }
+
+  const breaches = prog.tracks.filter((k) => {
+    const v = applyDev(k, prog.stds[k], devs[k][2]);
+    return METRICS[k].better === "up" ? v < prog.stds[k] : v > prog.stds[k];
+  }).map((k) => METRICS[k].label);
+
+  return { focus: METRICS[focus].label, focusKey: focus, cols, rows,
+           tell: sh.tell, breaches, program: prog };
+}
+
+const RUBRIC = [
+  { key: "communicate", letter: "C", label: "Communicate",
+    hint: "Giraffe language, connect before correct, refresh the personal or professional goal" },
+  { key: "observe", letter: "O", label: "Observe",
+    hint: "Tangible observation, the metrics put in front of them, and agreement reached on the gap" },
+  { key: "analyze", letter: "A", label: "Analyze",
+    hint: "QAQ probing that reaches a real root cause, not the first answer" },
+  { key: "counsel", letter: "C", label: "Counsel",
+    hint: "Connect, agree the way forward, then build or fix a SMART action plan together" },
+  { key: "hold", letter: "H", label: "Hold Accountable",
+    hint: "Both sides \u2014 what the coach will do and what the teammate will do" },
+];
+const LIMIT_DIM = { key: "limit", letter: "!", label: "Recognised the limit",
+  hint: "Saw that coaching alone will not fix this, and changed course" };
 
 function Practice({ handoff, onClearHandoff }) {
   const handoffAgent = handoff && handoff.name ? {
@@ -1510,7 +1606,7 @@ function Practice({ handoff, onClearHandoff }) {
   } : null;
 
   const [agent, setAgent] = useState(handoffAgent || SCENARIOS[0]);
-  const [topic, setTopic] = useState(handoff ? handoff.kpm : TOPICS[0]);
+  const [program, setProgram] = useState("tmobile");
   const [band, setBand] = useState("all");
   const [cardOpen, setCardOpen] = useState(true);
   const [showTell, setShowTell] = useState(false);
@@ -1530,8 +1626,11 @@ function Practice({ handoff, onClearHandoff }) {
 
   // The scenario's own scorecard, or the real one handed over from a case study.
   const card = handoff && agent.id === "handoff" && handoff.metrics
-    ? { focus: handoff.kpm, cols: handoff.metrics.columns, rows: handoff.metrics.rows, tell: handoff.metrics.story }
-    : SCORECARDS[agent.id];
+    ? { focus: handoff.kpm, cols: handoff.metrics.columns, rows: handoff.metrics.rows,
+        tell: handoff.metrics.story, program: { name: handoff.accountLine } }
+    : buildScorecard(agent.id, program);
+  const topic = card ? card.focus : "performance";
+  const programName = card && card.program ? card.program.name : "";
 
   const cardText = card
     ? card.cols.join(" | ") + "\n" + card.rows.map((r) => r.join(" | ")).join("\n")
@@ -1569,6 +1668,20 @@ function Practice({ handoff, onClearHandoff }) {
     "When someone genuinely reaches you, let it show — warmer tone, more detail, something volunteered that you " +
     "were sitting on. Do not make them earn it three times over. Equally, do not hand it over for free: one " +
     "generic 'I understand it's hard' is not enough, it has to be specific to you.\n\n" +
+
+    "REGISTER — this is a Philippine BPO and everyone observes it, including when they disagree.\n" +
+    "- You address your team leader with respect throughout. 'Po' and 'opo', 'sir' or 'ma\u2019am' where they fall " +
+    "naturally, not in every sentence. Never sarcastic, never dismissive, never contemptuous.\n" +
+    "- Forbidden at every level of openness, no matter how badly the coach handles you: 'so?', 'whatever', " +
+    "'that is not my problem', 'seriously?', mocking, talking down, interrupting, or any stage direction like " +
+    "eye-rolling or scoffing. These do not happen on this floor and they break the exercise.\n" +
+    "- Disagreement is respectful AND persistent. 'Sorry po, but...', 'I understand po, kaso kasi...', 'can I " +
+    "explain my side po?'. You will make your case, bring your evidence, and hold your ground if you believe you " +
+    "are right. Deference is not caving \u2014 you can be immovable and still be polite.\n" +
+    "- Resistance shows up as careful over-agreement, polite deflection, going quiet, nervous laughter, or a firmly " +
+    "argued point. Never as attitude.\n" +
+    "- Frustration comes out as flatness or withdrawal, not sharpness. A flat 'okay po' means you disagree and have " +
+    "stopped saying so \u2014 that is your strongest expression of it.\n\n" +
 
     "HOW YOU TALK: like a real agent on a call floor — plain, sometimes hesitant, occasionally Taglish. " +
     "Two or three sentences while GUARDED or OPENING. Up to five once ENGAGED or COMMITTED, because people " +
@@ -1686,32 +1799,34 @@ function Practice({ handoff, onClearHandoff }) {
           "COACH said, never the agent. Be demanding but fair. 0 = absent, 1 = gestured at, 2 = attempted but weak, " +
           "3 = done, 4 = done well.\n" +
           "communicate — opened with giraffe language: observable behaviour and its impact, never labels, blame or " +
-          "judgement. Connected before correcting. Refreshed the teammate's personal or professional goal so the " +
-          "conversation is anchored to something they actually want. Score 0 if they led with the problem.\n" +
-          "observe — presented a tangible observation and put the numbers in front of the teammate. Either invited " +
-          "them to find it ('looking at your metrics, which one do you feel you are struggling with?') or named it " +
-          "directly ('right now you are having challenges with X'), whichever suits this person's DISC style and " +
-          "openness. Score 0 if no specific metric or observable behaviour was ever named.\n" +
+          "judgement. Connected before correcting. Refreshed the teammate\u2019s personal or professional goal so the " +
+          "conversation is anchored to something they want. Score 0 if they led with the problem.\n" +
+          "observe — presented a tangible observation AND put the numbers in front of the teammate, either inviting " +
+          "them to find it ('looking at your metrics, which one do you feel you are struggling with?') or naming it " +
+          "directly, whichever suits this person. Then reached explicit AGREEMENT on the gap — the teammate said " +
+          "something that shows they accept it. Score 4 only if the observation landed and agreement was reached. " +
+          "Score 2 if the metric was named but the teammate never agreed. Score 0 if nothing specific was named.\n" +
           "analyze — used QAQ: asked, listened to the answer, then built the next question on that answer. Probed " +
-          "past the first explanation to a root cause. Score 2 or below if they accepted the first reason given, " +
-          "stacked questions without listening, or diagnosed for the teammate.\n" +
-          "wayforward — moved from root cause to what will actually address it. Best when the teammate proposes it " +
-          "and the coach shapes it; acceptable when the coach recommends and the teammate genuinely engages. Score " +
-          "0 if a solution was issued with no link to the root cause they uncovered.\n" +
-          "smart — the action is specific, measurable, attainable, relevant and time-bound. A target number and a " +
-          "deadline must both be present. Vague intent like 'I will improve my empathy' scores 1.\n" +
-          "accountable — BOTH halves. What the coach will do (when they check, what they will review, next " +
-          "touchpoint) AND what the teammate will do to hold themselves accountable. Score 2 at most if only one " +
-          "side is covered, 0 if neither.\n" +
+          "past the first explanation to a root cause. Score 2 or below if they took the first reason given, stacked " +
+          "questions without listening, or diagnosed on the teammate\u2019s behalf.\n" +
+          "counsel — connected with the teammate on the way forward, then either applied SMART to an action plan " +
+          "already on the table or built one with them from scratch. The action must address the ROOT CAUSE they " +
+          "uncovered, and must be specific, measurable, attainable, relevant and time-bound — a target number and a " +
+          "deadline both present. Best when the teammate proposes and the coach shapes. Score 1 for vague intent " +
+          "like 'I will improve my empathy'. Score 0 if a solution was issued with no link to the root cause.\n" +
+          "hold — BOTH halves. What the coach will do (when they check, what they review, the next touchpoint) AND " +
+          "what the teammate will do to hold themselves accountable. Score 2 at most if only one side is covered, " +
+          "0 if neither.\n" +
           (activeRubric.length > RUBRIC.length
-            ? "limit — did the coach notice this is not a straightforward skill gap, and respond to what is actually " +
-              "holding the behaviour in place instead of running the coaching script harder? Score 4 only if they " +
-              "named it, out loud, and changed course. Score 0 if they drove to an action plan as though nothing " +
-              "were wrong.\n"
+            ? "limit — did the coach notice this is not a straightforward skill gap and respond to what is actually " +
+              "holding the behaviour in place, instead of running the script harder? Score 4 only if they named it " +
+              "out loud and changed course. Score 0 if they drove to an action plan as though nothing were wrong.\n"
             : "") +
           'Return ONLY JSON: {"scores":{' +
           activeRubric.map((r) => '"' + r.key + '":{"score":0,"evidence":"short quote or \'nothing in the transcript\'","fix":"one rewrite"}').join(",") +
-          '},"headline":"the biggest thing to change","kept":"what they did well"}',
+          '},"did_well":["2 to 3 specific things the coach actually did, quoting or naming the moment"],' +
+          '"do_differently":["2 to 3 specific changes, each phrased as the line they should have said instead"],' +
+          '"headline":"the single biggest thing to change"}',
         messages: [{ role: "user", content:
           "Scenario: " + agent.name + " — " + agent.tag + " (" + (agent.disc || "n/a") + ", " +
           (BANDS.find((b) => b.id === agent.band)?.label || "unclassified") + ")\n\nTranscript:\n\n" + transcript }],
@@ -1786,10 +1901,23 @@ function Practice({ handoff, onClearHandoff }) {
             </p>
           )}
           <p className="cl-eyebrow cl-mt">Step two</p>
-          <h2 className="cl-h2">Pick the issue</h2>
-          <div className="cl-chips">
-            {TOPICS.map((t) => <button key={t} className={"cl-chip" + (topic === t ? " is-on" : "")} onClick={() => setTopic(t)}>{t}</button>)}
+          <h2 className="cl-h2">Pick the account</h2>
+          <p className="cl-lede">
+            The account decides which metrics exist. Domino\u2019s tracks order completion and no FCR,
+            because a repeat call is a new order. T-Mobile tracks FCR and transfer rate. Same person,
+            different scorecard.
+          </p>
+          <div className="cl-accounts">
+            {PROGRAMS.map((pr) => (
+              <button key={pr.id} className={"cl-acct" + (program === pr.id ? " is-on" : "")}
+                onClick={() => setProgram(pr.id)}>{pr.name}</button>
+            ))}
           </div>
+          {card && card.program && (
+            <p className="cl-fine">
+              {card.program.note} Focus KPM for {agent.name} here: <strong>{card.focus}</strong>.
+            </p>
+          )}
           <div className="cl-actions"><button className="cl-btn cl-go" onClick={begin}>Start the session</button></div>
         </div>
         <aside className="cl-profile">
@@ -1837,7 +1965,7 @@ function Practice({ handoff, onClearHandoff }) {
       <div className="cl-convo">
         <div className="cl-convo-head">
           <span className="cl-live">Live</span><strong>{agent.name}</strong>
-          <span className="cl-sep">/</span><span>{topic}</span>
+          <span className="cl-sep">/</span><span>{programName}</span><span className="cl-sep">/</span><span>{topic}</span>
           {agent.band && <span className="cl-bandtag">{BANDS.find((b) => b.id === agent.band)?.label}</span>}
           <button className="cl-btn cl-ghost cl-right cl-small" onClick={reset}>End and reset</button>
         </div>
@@ -1901,30 +2029,52 @@ function Practice({ handoff, onClearHandoff }) {
         </div>
       </div>
       <aside className="cl-rail">
-        <p className="cl-eyebrow">Scorecard</p>
-        {!score && <p className="cl-lede">Six tiles, blank until you end the session.</p>}
-        <div className="cl-tiles">
+        <p className="cl-eyebrow">The COACH path</p>
+        {!score && <p className="cl-lede">Five stages. They light up when you end the session and score it.</p>}
+
+        <ol className="cl-path">
           {activeRubric.map((r) => {
-            const s = score?.scores?.[r.key];
-            const v = s ? s.score : null;
-            const state = v === null ? "off" : v <= 1 ? "low" : v === 2 ? "mid" : "high";
+            const sc = score?.scores?.[r.key];
+            const v = sc ? sc.score : null;
+            const state = v === null ? "off" : v >= 3 ? "hit" : v === 2 ? "part" : "miss";
             return (
-              <div key={r.key} className={"cl-tile cl-" + state}>
-                <div className="cl-tile-top">
-                  <span className="cl-tile-label">{r.label}</span>
-                  <span className="cl-tile-num">{v === null ? "—" : v + "/4"}</span>
+              <li key={r.key} className={"cl-node cl-n-" + state}>
+                <span className="cl-node-dot">{r.letter}</span>
+                <div className="cl-node-body">
+                  <div className="cl-node-top">
+                    <strong>{r.label}</strong>
+                    <span className="cl-node-score">{v === null ? "—" : v + "/4"}</span>
+                  </div>
+                  {!score && r.hint && <p className="cl-hint">{r.hint}</p>}
+                  {sc && (
+                    <>
+                      <p className="cl-ev">{sc.evidence}</p>
+                      <p className="cl-fix">{sc.fix}</p>
+                    </>
+                  )}
                 </div>
-                <div className="cl-bar"><span style={{ width: v === null ? 0 : (v / 4) * 100 + "%" }} /></div>
-                {s && <div className="cl-tile-body"><p className="cl-ev">{s.evidence}</p><p className="cl-fix">{s.fix}</p></div>}
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ol>
+
         {score && (
-          <div className="cl-verdict">
+          <div className="cl-debrief">
             <p className="cl-eyebrow">Change this first</p>
             <p className="cl-headline">{score.headline}</p>
-            <p className="cl-kept">{score.kept}</p>
+
+            {score.did_well?.length > 0 && (
+              <>
+                <p className="cl-eyebrow cl-mt">What you did well</p>
+                <ul className="cl-dw">{score.did_well.map((d, i) => <li key={i}>{d}</li>)}</ul>
+              </>
+            )}
+            {score.do_differently?.length > 0 && (
+              <>
+                <p className="cl-eyebrow cl-mt">Do differently next time</p>
+                <ul className="cl-dd">{score.do_differently.map((d, i) => <li key={i}>{d}</li>)}</ul>
+              </>
+            )}
           </div>
         )}
 
@@ -2094,6 +2244,25 @@ const CSS = `
 .cl-a-high .cl-auth-pct { color: var(--red); }
 .cl-auth-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--soft); }
 .cl-auth-body { font-size: 12.5px; margin: 8px 0 0; }
+.cl-path { list-style: none; margin: 12px 0 0; padding: 0; position: relative; }
+.cl-node { display: flex; gap: 12px; padding-bottom: 16px; position: relative; }
+.cl-node:not(:last-child)::before { content: ""; position: absolute; left: 13px; top: 28px; bottom: 0; width: 2px; background: var(--line); }
+.cl-node-dot { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line); background: var(--white); display: flex; align-items: center; justify-content: center; font-family: Anton, sans-serif; font-size: 13px; color: #B0B0B0; z-index: 1; }
+.cl-node-body { flex: 1; min-width: 0; }
+.cl-node-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cl-node-top strong { font-size: 13.5px; }
+.cl-node-score { font-size: 12px; font-weight: 700; color: var(--soft); }
+.cl-n-hit .cl-node-dot { border-color: #1F8A4C; background: #1F8A4C; color: var(--white); }
+.cl-n-hit .cl-node-score { color: #1F8A4C; }
+.cl-n-part .cl-node-dot { border-color: #B5760A; background: #B5760A; color: var(--white); }
+.cl-n-part .cl-node-score { color: #B5760A; }
+.cl-n-miss .cl-node-dot { border-color: var(--red); background: var(--red); color: var(--white); }
+.cl-n-miss .cl-node-score { color: var(--red); }
+.cl-debrief { margin-top: 18px; padding-top: 16px; border-top: 2px solid var(--red); }
+.cl-dw, .cl-dd { margin: 0; padding-left: 17px; }
+.cl-dw li, .cl-dd li { font-size: 12.5px; margin-bottom: 6px; }
+.cl-dw li { color: #17663A; }
+.cl-dd li { color: var(--ink); }
 .cl-scorecard { border-bottom: 1px solid var(--line); background: #FAFAFA; }
 .cl-sc-toggle { width: 100%; display: flex; align-items: center; gap: 12px; background: none; border: 0; padding: 10px 16px; text-align: left; font-size: 12.5px; }
 .cl-sc-toggle .cl-eyebrow { margin: 0; }
@@ -2211,25 +2380,8 @@ const CSS = `
 .cl-chip.is-on { background: var(--red); border-color: var(--red); color: var(--white); }
 
 .cl-rail { background: var(--white); border: 1px solid var(--line); padding: 18px; }
-.cl-tiles { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
-.cl-tile { border: 1px solid var(--line); border-left: 4px solid var(--line); padding: 9px 11px; }
-.cl-tile-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.cl-tile-label { font-size: 12.5px; font-weight: 500; }
-.cl-tile-num { font-size: 12px; color: var(--soft); font-weight: 700; }
-.cl-bar { height: 4px; background: var(--paper); margin-top: 7px; }
-.cl-bar span { display: block; height: 100%; background: var(--soft); transition: width .5s ease; }
-.cl-tile.cl-high { border-left-color: var(--black); }
-.cl-tile.cl-high .cl-bar span { background: var(--black); }
-.cl-tile.cl-high .cl-tile-num { color: var(--black); }
-.cl-tile.cl-mid { border-left-color: #A8A8A8; }
-.cl-tile.cl-mid .cl-bar span { background: #A8A8A8; }
-.cl-tile.cl-low { border-left-color: var(--red); }
-.cl-tile.cl-low .cl-bar span { background: var(--red); }
-.cl-tile.cl-low .cl-tile-num { color: var(--red); }
-.cl-tile-body { margin-top: 8px; }
 .cl-ev { font-size: 11.5px; color: var(--soft); margin: 0 0 5px; padding-left: 9px; border-left: 2px solid var(--line); font-style: italic; }
 .cl-fix { font-size: 12.5px; margin: 0; }
-.cl-verdict { margin-top: 18px; padding-top: 16px; border-top: 2px solid var(--red); }
 .cl-headline { font-size: 14.5px; font-weight: 600; margin: 0 0 8px; }
 .cl-kept { font-size: 13px; color: var(--soft); margin: 0; }
 
