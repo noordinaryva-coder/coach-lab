@@ -41,7 +41,7 @@ const { useState, useRef, useEffect } = React;
  *  API key server-side. Shipping the preview value to a real site means
  *  every request returns 401 and nothing generates.
  * ------------------------------------------------------------------ */
-const API_URL = "/api/claude";  // deployed value — routes through api/claude.js
+const API_URL = "/api/claude";  // deployed value
 
 const MODEL = "claude-sonnet-4-6";
 
@@ -960,7 +960,7 @@ function CaseStudy({ onCoach }) {
               onCoach && onCoach({
                 name: p.name, disc: p.disc, discNote: p.discNote, star: p.star,
                 tenure: p.tenure, context: p.context, behaviour: p.behaviour,
-                kpm: p.kpm, accountLine,
+                kpm: p.kpm, accountLine, metrics,
                 calls: scripts.filter((s) => !s.failed).map((s) =>
                   s.contact_id + " (" + s.driver + ", " + fmtSecs(s.duration_secs) + ", hold " +
                   fmtSecs(s.hold_secs) + "): " +
@@ -1399,14 +1399,105 @@ const SCENARIOS = [
     watch: "If the whole team shows the same trend, it is a system failure wearing a performance costume." },
 ];
 
+/* Each scenario carries its own scorecard. The numbers are not decoration — in most
+   cases the SHAPE of the trend is the evidence for the diagnosis. */
+const SCORECARDS = {
+  carla: { focus: "Quality Score",
+    cols: ["Pay Period", "Quality", "Std", "Compliance", "Std", "CSAT", "Std", "AHT", "Std", "Hold", "ACW"],
+    rows: [["Aug 16-31", "78%", "90%", "71%", "95%", "84%", "80%", "412 secs", "450 secs", "0:40", "22 secs"],
+           ["Sept 1-15", "76%", "90%", "68%", "95%", "86%", "80%", "408 secs", "450 secs", "0:35", "20 secs"],
+           ["Sept 16-30", "74%", "90%", "64%", "95%", "85%", "80%", "401 secs", "450 secs", "0:38", "21 secs"]],
+    tell: "Compliance is the only breach and it is widening. Fast, low hold, low ACW, happy customers — she is efficient and confident, just missing required steps nobody has spelled out. Knowledge gap." },
+  jomar: { focus: "Quality Score",
+    cols: ["Pay Period", "Quality", "Std", "CSAT", "Std", "AHT", "Std", "ACW", "Std", "Adherence"],
+    rows: [["Aug 16-31", "91%", "90%", "88%", "80%", "455 secs", "480 secs", "28 secs", "30 secs", "97%"],
+           ["Sept 1-15", "72%", "90%", "79%", "80%", "521 secs", "480 secs", "58 secs", "30 secs", "96%"],
+           ["Sept 16-30", "89%", "90%", "87%", "80%", "462 secs", "480 secs", "31 secs", "30 secs", "97%"]],
+    tell: "ACW doubles in the bad period and drops back. When he is on top of it he is fine; when he loses the thread he is scrambling after the call. The swing is the coaching topic, not the average." },
+  kevin: { focus: "AHT",
+    cols: ["Pay Period", "AHT", "Std", "Talk", "Hold", "Std", "ACW", "Std", "Transfer", "Std", "CSAT", "Std"],
+    rows: [["Aug 16-31", "590 secs", "600 secs", "448 secs", "2:00", "1:30", "22 secs", "30 secs", "15%", "10%", "65%", "75%"],
+           ["Sept 1-15", "605 secs", "600 secs", "453 secs", "1:30", "1:30", "28 secs", "30 secs", "12%", "10%", "72%", "75%"],
+           ["Sept 16-30", "710 secs", "600 secs", "527 secs", "2:30", "1:30", "33 secs", "30 secs", "8%", "10%", "75%", "75%"]],
+    tell: "Talk time is where the AHT went — up 79 seconds. Transfers halved and CSAT hit standard in the same period. He stopped passing calls off and started solving them himself, slowly. Reinforce before you redirect." },
+  mila: { focus: "FCR",
+    cols: ["Pay Period", "FCR", "Std", "Recontact", "Std", "Resolution", "Std", "AHT", "Std", "Hold", "CSAT"],
+    rows: [["Aug 16-31", "61%", "75%", "39%", "25%", "74%", "85%", "498 secs", "520 secs", "1:10", "77%"],
+           ["Sept 1-15", "62%", "75%", "38%", "25%", "75%", "85%", "494 secs", "520 secs", "1:08", "78%"],
+           ["Sept 16-30", "61%", "75%", "39%", "25%", "74%", "85%", "501 secs", "520 secs", "1:12", "77%"]],
+    tell: "Every single column is flat to within a point across three periods, and she has been coached twice in that window. Nothing moved at all. A perfect flatline after coaching is the agreeable-not-committed signature." },
+  bea: { focus: "Quality Score",
+    cols: ["Pay Period", "Quality", "Std", "Compliance", "Std", "CSAT", "Std", "FCR", "Std", "AHT", "Std"],
+    rows: [["Aug 16-31", "81%", "90%", "97%", "95%", "93%", "80%", "82%", "75%", "467 secs", "500 secs"],
+           ["Sept 1-15", "79%", "90%", "96%", "95%", "94%", "80%", "84%", "75%", "455 secs", "500 secs"],
+           ["Sept 16-30", "80%", "90%", "98%", "95%", "95%", "80%", "83%", "75%", "462 secs", "500 secs"]],
+    tell: "Compliance above standard, customers delighted, resolving first time, under AHT. Only the subjective QA soft-skill items are marked down. Her objection has teeth and the coach has to concede that before anything lands." },
+  mae: { focus: "CSAT",
+    cols: ["Pay Period", "CSAT", "Std", "Empathy", "Std", "Acknowledgement", "Std", "AHT", "Hold", "FCR"],
+    rows: [["Aug 16-31", "68%", "80%", "2.1/4", "3.0/4", "1.8/4", "3.0/4", "455 secs", "1:20", "71%"],
+           ["Sept 1-15", "82%", "80%", "3.2/4", "3.0/4", "3.1/4", "3.0/4", "470 secs", "1:15", "78%"],
+           ["Sept 16-30", "69%", "80%", "2.2/4", "3.0/4", "1.9/4", "3.0/4", "449 secs", "1:22", "72%"]],
+    tell: "The middle period proves she can do it — empathy and acknowledgement both cleared standard, and FCR rose with them. Two weeks later they are back down. The skill exists; the reinforcement did not." },
+  dana: { focus: "Transfer Rate",
+    cols: ["Pay Period", "Transfer", "Std", "Hold", "Std", "AHT", "Std", "FCR", "Std", "Tool usage", "Std"],
+    rows: [["Aug 16-31", "19%", "10%", "3:05", "1:30", "648 secs", "600 secs", "58%", "75%", "61%", "90%"],
+           ["Sept 1-15", "22%", "10%", "3:20", "1:30", "671 secs", "600 secs", "55%", "75%", "58%", "90%"],
+           ["Sept 16-30", "24%", "10%", "3:40", "1:30", "702 secs", "600 secs", "52%", "75%", "54%", "90%"],
+           ["TEAM AVERAGE", "12%", "10%", "1:45", "1:30", "612 secs", "600 secs", "71%", "75%", "88%", "90%"]],
+    tell: "Tool usage at 54% against a team average of 88% is the whole case. The tools she blames are the tools she is not opening — long holds, then a transfer. Everyone has the same tools." },
+  kiel: { focus: "CSAT",
+    cols: ["Pay Period", "CSAT", "Std", "Quality", "Std", "AHT", "Std", "Hold", "ACW", "FCR", "Std"],
+    rows: [["Aug 16-31", "73%", "80%", "84%", "90%", "521 secs", "550 secs", "1:05", "29 secs", "72%", "75%"],
+           ["Sept 1-15", "74%", "80%", "83%", "90%", "518 secs", "550 secs", "1:02", "31 secs", "73%", "75%"],
+           ["Sept 16-30", "72%", "80%", "85%", "90%", "530 secs", "550 secs", "1:08", "30 secs", "71%", "75%"]],
+    tell: "Slightly under on everything, dramatically under on nothing. There is no number to open with, which is the point — this conversation has to start with him, not the scorecard." },
+  ramon: { focus: "AHT",
+    cols: ["Pay Period", "AHT", "Std", "Talk", "Hold", "Std", "ACW", "Std", "CSAT", "Std", "FCR"],
+    rows: [["Aug 16-31", "681 secs", "600 secs", "462 secs", "3:10", "1:30", "29 secs", "30 secs", "71%", "80%", "69%"],
+           ["Sept 1-15", "724 secs", "600 secs", "477 secs", "3:45", "1:30", "22 secs", "30 secs", "69%", "80%", "67%"],
+           ["Sept 16-30", "769 secs", "600 secs", "486 secs", "4:20", "1:30", "23 secs", "30 secs", "66%", "80%", "64%"]],
+    tell: "Hold is nearly three times standard and climbing — he is stalling to double-check himself. Talk time barely moves, so it is not over-explaining, it is hesitation. That matches how he handles feedback." },
+  tris: { focus: "Sales Conversion",
+    cols: ["Pay Period", "Conversion", "Std", "Offer rate", "Std", "CSAT", "Std", "Quality", "Std", "AHT", "Std"],
+    rows: [["Jun 16-30", "23%", "22%", "94%", "95%", "90%", "80%", "93%", "90%", "441 secs", "480 secs"],
+           ["Sept 1-15", "11%", "22%", "48%", "95%", "92%", "80%", "93%", "90%", "398 secs", "480 secs"],
+           ["Sept 16-30", "9%", "22%", "39%", "95%", "93%", "80%", "95%", "90%", "385 secs", "480 secs"]],
+    tell: "Offer rate collapsed from 94% to 39% — he stopped pitching, he did not get worse at pitching. June is on the table on purpose: he was fine before the promotion went elsewhere in July." },
+  nadine: { focus: "Across the board",
+    cols: ["Pay Period", "CSAT", "Std", "Quality", "Std", "Empathy", "Std", "Adherence", "Std", "AHT", "ACW"],
+    rows: [["Feb 1-15", "89%", "80%", "94%", "90%", "3.6/4", "3.0/4", "98%", "95%", "441 secs", "26 secs"],
+           ["Sept 1-15", "74%", "80%", "81%", "90%", "2.4/4", "3.0/4", "91%", "95%", "512 secs", "44 secs"],
+           ["Sept 16-30", "71%", "80%", "78%", "90%", "2.1/4", "3.0/4", "88%", "95%", "534 secs", "51 secs"]],
+    tell: "Every column moving the wrong way at once, from a strong February base, with ACW doubling. Uniform decline across unrelated metrics is almost never a skill gap — it is capacity." },
+  aldrin: { focus: "Adherence",
+    cols: ["Pay Period", "Adherence", "Std", "Unplanned abs.", "Std", "Quality", "Std", "CSAT", "Std", "AHT", "ACW"],
+    rows: [["Aug 16-31", "94%", "95%", "1 day", "1 day", "88%", "90%", "82%", "80%", "468 secs", "30 secs"],
+           ["Sept 1-15", "89%", "95%", "3 days", "1 day", "84%", "90%", "78%", "80%", "455 secs", "28 secs"],
+           ["Sept 16-30", "82%", "95%", "4 days", "1 day", "79%", "90%", "74%", "80%", "449 secs", "27 secs"]],
+    tell: "Adherence and absences move first, quality follows. AHT and ACW are unchanged — he is still competent, he is just not here. Absences cluster on Tuesdays and Thursdays." },
+  joy: { focus: "AHT",
+    cols: ["Pay Period", "AHT", "Std", "Hold", "Std", "Talk", "ACW", "Std", "CSAT", "Std", "Transfer"],
+    rows: [["Aug 16-31", "688 secs", "600 secs", "2:50", "1:30", "462 secs", "56 secs", "30 secs", "83%", "80%", "9%"],
+           ["Sept 1-15", "694 secs", "600 secs", "2:55", "1:30", "459 secs", "60 secs", "30 secs", "84%", "80%", "8%"],
+           ["Sept 16-30", "701 secs", "600 secs", "3:00", "1:30", "461 secs", "58 secs", "30 secs", "83%", "80%", "9%"],
+           ["TEAM AVERAGE", "697 secs", "600 secs", "2:58", "1:30", "460 secs", "59 secs", "30 secs", "82%", "80%", "9%"]],
+    tell: "She matches the team average on every single column, including the two that breach standard. When the whole LOB fails the same way, the standard or the process is wrong, not the agent." },
+};
+
 const TOPICS = ["Empathy on calls", "Average handle time", "QA compliance", "Hold procedure", "Adherence and attendance", "Sales conversion"];
 const RUBRIC = [
-  { key: "connect", label: "Connect before correct" },
-  { key: "probe", label: "QAQ probing" },
-  { key: "ksb", label: "KSB diagnosis" },
-  { key: "language", label: "Giraffe language" },
-  { key: "smart", label: "SMART action plan" },
-  { key: "accountability", label: "Accountability set" },
+  { key: "communicate", label: "Communicate",
+    hint: "Giraffe language, connect before correct, refresh the personal or professional goal" },
+  { key: "observe", label: "Observe",
+    hint: "Tangible observation, metrics put in front of them, pitched to the person" },
+  { key: "analyze", label: "Analyze",
+    hint: "QAQ probing that reaches a real root cause, not the first answer" },
+  { key: "wayforward", label: "Way forward",
+    hint: "Addresses the root cause, teammate-led where possible" },
+  { key: "smart", label: "SMART plan",
+    hint: "Specific, measurable, attainable, relevant, time-bound" },
+  { key: "accountable", label: "Hold accountable",
+    hint: "Both sides — what the coach does and what the teammate does" },
 ];
 const LIMIT_DIM = { key: "limit", label: "Recognised the limit" };
 
@@ -1421,6 +1512,8 @@ function Practice({ handoff, onClearHandoff }) {
   const [agent, setAgent] = useState(handoffAgent || SCENARIOS[0]);
   const [topic, setTopic] = useState(handoff ? handoff.kpm : TOPICS[0]);
   const [band, setBand] = useState("all");
+  const [cardOpen, setCardOpen] = useState(true);
+  const [showTell, setShowTell] = useState(false);
   const [started, setStarted] = useState(false);
   const [turns, setTurns] = useState([]);
   const [draft, setDraft] = useState("");
@@ -1434,6 +1527,15 @@ function Practice({ handoff, onClearHandoff }) {
 
   const isUncoachable = agent.band === "none";
   const activeRubric = agent.band === "low" || isUncoachable ? [...RUBRIC, LIMIT_DIM] : RUBRIC;
+
+  // The scenario's own scorecard, or the real one handed over from a case study.
+  const card = handoff && agent.id === "handoff" && handoff.metrics
+    ? { focus: handoff.kpm, cols: handoff.metrics.columns, rows: handoff.metrics.rows, tell: handoff.metrics.story }
+    : SCORECARDS[agent.id];
+
+  const cardText = card
+    ? card.cols.join(" | ") + "\n" + card.rows.map((r) => r.join(" | ")).join("\n")
+    : "";
 
   const system =
     "You are roleplaying a contact centre agent in a one-to-one coaching session. Your name is " + agent.name +
@@ -1471,6 +1573,18 @@ function Practice({ handoff, onClearHandoff }) {
     "HOW YOU TALK: like a real agent on a call floor — plain, sometimes hesitant, occasionally Taglish. " +
     "Two or three sentences while GUARDED or OPENING. Up to five once ENGAGED or COMMITTED, because people " +
     "talk more when they feel safe. Never analyse the conversation, never coach yourself, never break character.\n" +
+
+    (cardText
+      ? "\nYOUR SCORECARD — the coach can see this and so can you:\n" + cardText + "\n" +
+        "You know roughly where you stand, the way a real agent does: you remember the headline number and " +
+        "whether it went up or down, not every column. If the coach brings up your metrics, react in character " +
+        "before you react to the data — someone GUARDED questions or minimises the number, someone ENGAGED " +
+        "actually looks at it and tries to explain it. Never recite the whole table back. If the coach quotes a " +
+        "figure accurately, that counts as naming something specific about your work and moves you up a level. " +
+        "If the coach gets a number wrong, correct them — you would. " +
+        "If they ask which metric YOU think you are struggling with, answer at your current level: guarded means " +
+        "naming the safest one or saying you are not sure, engaged means naming the real one.\n"
+      : "") +
 
     (isUncoachable
       ? "\nIMPORTANT — coaching cannot fix your situation, but that does NOT mean you stay cold. You warm up like " +
@@ -1568,12 +1682,27 @@ function Practice({ handoff, onClearHandoff }) {
     try {
       setScore(await callJSON({
         system:
-          "You assess coaching conversations for a contact centre leadership programme. Score only what the COACH " +
-          "said. Be demanding but fair. 0 = absent, 2 = attempted but weak, 4 = done well.\nconnect — built safety " +
-          "before raising the issue\nprobe — question, listened, follow-up built on the answer (QAQ)\nksb — worked out " +
-          "knowledge, skill or behaviour before prescribing\nlanguage — observable behaviour and impact (giraffe) " +
-          "rather than judgement (jackal)\nsmart — specific, measurable, achievable, relevant, time-bound action\n" +
-          "accountability — what happens next, who checks, when\n" +
+          "You assess coaching conversations against the COACH certified coaching programme. Score only what the " +
+          "COACH said, never the agent. Be demanding but fair. 0 = absent, 1 = gestured at, 2 = attempted but weak, " +
+          "3 = done, 4 = done well.\n" +
+          "communicate — opened with giraffe language: observable behaviour and its impact, never labels, blame or " +
+          "judgement. Connected before correcting. Refreshed the teammate's personal or professional goal so the " +
+          "conversation is anchored to something they actually want. Score 0 if they led with the problem.\n" +
+          "observe — presented a tangible observation and put the numbers in front of the teammate. Either invited " +
+          "them to find it ('looking at your metrics, which one do you feel you are struggling with?') or named it " +
+          "directly ('right now you are having challenges with X'), whichever suits this person's DISC style and " +
+          "openness. Score 0 if no specific metric or observable behaviour was ever named.\n" +
+          "analyze — used QAQ: asked, listened to the answer, then built the next question on that answer. Probed " +
+          "past the first explanation to a root cause. Score 2 or below if they accepted the first reason given, " +
+          "stacked questions without listening, or diagnosed for the teammate.\n" +
+          "wayforward — moved from root cause to what will actually address it. Best when the teammate proposes it " +
+          "and the coach shapes it; acceptable when the coach recommends and the teammate genuinely engages. Score " +
+          "0 if a solution was issued with no link to the root cause they uncovered.\n" +
+          "smart — the action is specific, measurable, attainable, relevant and time-bound. A target number and a " +
+          "deadline must both be present. Vague intent like 'I will improve my empathy' scores 1.\n" +
+          "accountable — BOTH halves. What the coach will do (when they check, what they will review, next " +
+          "touchpoint) AND what the teammate will do to hold themselves accountable. Score 2 at most if only one " +
+          "side is covered, 0 if neither.\n" +
           (activeRubric.length > RUBRIC.length
             ? "limit — did the coach notice this is not a straightforward skill gap, and respond to what is actually " +
               "holding the behaviour in place instead of running the coaching script harder? Score 4 only if they " +
@@ -1685,7 +1814,18 @@ function Practice({ handoff, onClearHandoff }) {
               </>
             )}
             <p className="cl-eyebrow cl-mt">You will be scored on</p>
-            <ul className="cl-tick">{activeRubric.map((r) => <li key={r.key}>{r.label}</li>)}</ul>
+            <ul className="cl-tick">{activeRubric.map((r) => (
+              <li key={r.key}>
+                <strong>{r.label}</strong>
+                {r.hint && <span className="cl-hint">{r.hint}</span>}
+              </li>
+            ))}</ul>
+            {card && (
+              <>
+                <p className="cl-eyebrow cl-mt">Focus KPM</p>
+                <p className="cl-note"><strong>{card.focus}</strong> — full scorecard opens in the session.</p>
+              </>
+            )}
           </div>
         </aside>
       </div>
@@ -1701,6 +1841,35 @@ function Practice({ handoff, onClearHandoff }) {
           {agent.band && <span className="cl-bandtag">{BANDS.find((b) => b.id === agent.band)?.label}</span>}
           <button className="cl-btn cl-ghost cl-right cl-small" onClick={reset}>End and reset</button>
         </div>
+        {card && (
+          <div className="cl-scorecard">
+            <button className="cl-sc-toggle" onClick={() => setCardOpen(!cardOpen)}>
+              <span className="cl-eyebrow">{agent.name}\u2019s scorecard</span>
+              <span>Focus KPM: <strong>{card.focus}</strong></span>
+              <span className="cl-sc-chev">{cardOpen ? "Hide" : "Show"}</span>
+            </button>
+            {cardOpen && (
+              <div className="cl-sc-body">
+                <div className="cl-tablewrap">
+                  <table className="cl-metrics cl-sc-table">
+                    <thead><tr>{card.cols.map((c, i) =>
+                      <th key={i} className={/std/i.test(c) ? "cl-th-std" : ""}>{c}</th>)}</tr></thead>
+                    <tbody>{card.rows.map((r, i) => (
+                      <tr key={i} className={/team|average/i.test(String(r[0])) ? "cl-sc-team" : ""}>
+                        {r.map((v, j) => <td key={j} className={j === 0 ? "cl-td-period" : ""}>{v}</td>)}
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+                {card.tell && showTell && <p className="cl-story">{card.tell}</p>}
+                <button className="cl-linkbtn cl-sc-tell" onClick={() => setShowTell(!showTell)}>
+                  {showTell ? "Hide facilitator note" : "Facilitator note"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="cl-stream">
           {turns.map((t, i) => (
             <div key={i} className={"cl-turn cl-" + t.role}>
@@ -1925,6 +2094,16 @@ const CSS = `
 .cl-a-high .cl-auth-pct { color: var(--red); }
 .cl-auth-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--soft); }
 .cl-auth-body { font-size: 12.5px; margin: 8px 0 0; }
+.cl-scorecard { border-bottom: 1px solid var(--line); background: #FAFAFA; }
+.cl-sc-toggle { width: 100%; display: flex; align-items: center; gap: 12px; background: none; border: 0; padding: 10px 16px; text-align: left; font-size: 12.5px; }
+.cl-sc-toggle .cl-eyebrow { margin: 0; }
+.cl-sc-chev { margin-left: auto; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--soft); }
+.cl-sc-toggle:hover .cl-sc-chev { color: var(--ink); }
+.cl-sc-body { padding: 0 16px 14px; }
+.cl-sc-table td { padding: 7px 9px; text-align: center; font-size: 12.5px; background: var(--white); }
+.cl-sc-table td.cl-td-period { text-align: left; font-weight: 700; white-space: nowrap; }
+.cl-sc-team td { background: #EFEFEF; font-style: italic; }
+.cl-sc-tell { margin-top: 10px; font-size: 12px; }
 .cl-linkbtn { background: none; border: 0; padding: 0; color: var(--red); text-decoration: underline; font-size: inherit; }
 
 .cl-profile { background: var(--white); border: 1px solid var(--line); overflow: hidden; }
@@ -1939,7 +2118,8 @@ const CSS = `
 .cl-prow ul { margin: 4px 0 0; padding-left: 17px; }
 .cl-prow li { font-size: 12.5px; color: var(--soft); margin-bottom: 2px; }
 .cl-tick { margin: 0; padding: 0; list-style: none; }
-.cl-tick li { font-size: 12.5px; color: var(--soft); padding: 5px 0; border-bottom: 1px solid var(--line); }
+.cl-tick li { font-size: 13px; color: var(--ink); padding: 7px 0; border-bottom: 1px solid var(--line); }
+.cl-hint { display: block; font-size: 11.5px; color: var(--soft); margin-top: 2px; line-height: 1.4; }
 
 .cl-tablewrap { overflow-x: auto; border: 1px solid var(--line); }
 .cl-metrics { border-collapse: collapse; width: 100%; font-size: 12.5px; }
