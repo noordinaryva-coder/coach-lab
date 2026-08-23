@@ -1834,14 +1834,17 @@ function Practice({ handoff, onClearHandoff }) {
     setScoring(true); setError("");
     const transcript = turns.map((t) => (t.role === "user" ? "COACH: " : "AGENT: ") + t.content).join("\n");
     try {
-      setScore(await callJSON({
+      const res = await callJSON({
         system:
           "You assess coaching conversations against the COACH certified coaching programme. Score only what the " +
           "COACH said, never the agent. Be demanding but fair. 0 = absent, 1 = gestured at, 2 = attempted but weak, " +
           "3 = done, 4 = done well.\n" +
-          "communicate — opened with giraffe language: observable behaviour and its impact, never labels, blame or " +
-          "judgement. Connected before correcting. Refreshed the teammate\u2019s personal or professional goal so the " +
-          "conversation is anchored to something they want. Score 0 if they led with the problem.\n" +
+          "communicate — three parts, scored by how many are present: (a) giraffe language, describing observable " +
+          "behaviour and impact rather than labels or blame, (b) connected before correcting \u2014 any genuine " +
+          "check-in, greeting or acknowledgement of the person before the problem, (c) refreshed the teammate\u2019s " +
+          "personal or professional goal. All three = 4. Two = 3. One = 2. A bare hello only = 1. Nothing at all = 0. " +
+          "IMPORTANT: if the TEAMMATE raises the problem first, that is not the coach leading with it \u2014 judge the " +
+          "coach on what the coach did. Asking how someone is before moving to the metric counts as (b), even briefly.\n" +
           "observe — presented a tangible observation AND put the numbers in front of the teammate, either inviting " +
           "them to find it ('looking at your metrics, which one do you feel you are struggling with?') or naming it " +
           "directly, whichever suits this person. Then reached explicit AGREEMENT on the gap — the teammate said " +
@@ -1865,16 +1868,22 @@ function Practice({ handoff, onClearHandoff }) {
               "holding the behaviour in place, instead of running the script harder? Score 4 only if they named it " +
               "out loud and changed course. Score 0 if they drove to an action plan as though nothing were wrong.\n"
             : "") +
+          "OUTPUT RULES: every key below is REQUIRED — never omit a stage, never stop early. Keep evidence under 15 " +
+          "words and fix under 25 words so the whole object fits. Quote the STRONGEST supporting moment, not the " +
+          "first one you find. If a stage genuinely did not happen, say 'not in the transcript'.\n" +
           'Return ONLY JSON: {"scores":{' +
-          activeRubric.map((r) => '"' + r.key + '":{"score":0,"evidence":"short quote or \'nothing in the transcript\'","fix":"one rewrite"}').join(",") +
-          '},"did_well":["2 to 3 specific things the coach actually did, quoting or naming the moment"],' +
-          '"do_differently":["2 to 3 specific changes, each phrased as the line they should have said instead"],' +
-          '"headline":"the single biggest thing to change"}',
+          activeRubric.map((r) => '"' + r.key + '":{"score":0,"evidence":"under 15 words","fix":"under 25 words"}').join(",") +
+          '},"did_well":["2 short items, each under 20 words"],' +
+          '"do_differently":["2 short items, each under 25 words, phrased as the line to say instead"],' +
+          '"headline":"one sentence"}',
         messages: [{ role: "user", content:
           "Scenario: " + agent.name + " — " + agent.tag + " (" + (agent.disc || "n/a") + ", " +
           (BANDS.find((b) => b.id === agent.band)?.label || "unclassified") + ")\n\nTranscript:\n\n" + transcript }],
-        maxTokens: 1000,
-      }));
+        maxTokens: 2000,
+      });
+      const missing = activeRubric.filter((r) => !res?.scores?.[r.key]).map((r) => r.label);
+      if (missing.length) setError("Incomplete score — " + missing.join(", ") + " did not come back. Score again.");
+      setScore(res);
     } catch (e) { setError(e.message || "Scoring failed. Try again."); }
     setScoring(false);
   }
