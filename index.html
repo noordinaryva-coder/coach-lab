@@ -1617,8 +1617,12 @@ const RUBRIC = [
   { key: "hold", letter: "H", label: "Hold Accountable",
     hint: "Both sides \u2014 what the coach will do, what the teammate will do, and the impact if nothing changes" },
 ];
+/* Only for the "not a coaching problem" band. */
 const LIMIT_DIM = { key: "limit", letter: "!", label: "Recognised the limit",
   hint: "Saw that coaching alone will not fix this, and changed course" };
+/* For the "hard to coach" band — the challenge is getting through, not knowing when to stop. */
+const GUARD_DIM = { key: "guard", letter: "+", label: "Got past the guard",
+  hint: "Moved a closed teammate to genuinely engaged, rather than settling for polite compliance" };
 
 function Practice({ handoff, onClearHandoff }) {
   const handoffAgent = handoff && handoff.name ? {
@@ -1646,7 +1650,9 @@ function Practice({ handoff, onClearHandoff }) {
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: "smooth" }); }, [turns, busy]);
 
   const isUncoachable = agent.band === "none";
-  const activeRubric = agent.band === "low" || isUncoachable ? [...RUBRIC, LIMIT_DIM] : RUBRIC;
+  const activeRubric = isUncoachable ? [...RUBRIC, LIMIT_DIM]
+    : agent.band === "low" ? [...RUBRIC, GUARD_DIM]
+    : RUBRIC;
 
   // The scenario's own scorecard, or the real one handed over from a case study.
   const card = handoff && agent.id === "handoff" && handoff.metrics
@@ -1863,16 +1869,30 @@ function Practice({ handoff, onClearHandoff }) {
           "if the behaviour does not change, and what changes for them if it does — stated plainly and without " +
           "threat, tied to something the teammate cares about. Score 4 only with all three. Score 2 at most with " +
           "one of them missing. Score 0 if the session ended with no follow-up agreed at all.\n" +
-          (activeRubric.length > RUBRIC.length
+          (isUncoachable
             ? "limit — did the coach notice this is not a straightforward skill gap and respond to what is actually " +
               "holding the behaviour in place, instead of running the script harder? Score 4 only if they named it " +
               "out loud and changed course. Score 0 if they drove to an action plan as though nothing were wrong.\n"
             : "") +
-          "OUTPUT RULES: every key below is REQUIRED — never omit a stage, never stop early. Keep evidence under 15 " +
-          "words and fix under 25 words so the whole object fits. Quote the STRONGEST supporting moment, not the " +
-          "first one you find. If a stage genuinely did not happen, say 'not in the transcript'.\n" +
+          (agent.band === "low" && !isUncoachable
+            ? "guard — this teammate starts closed, and the job was to get through. Score 4 if they ended up " +
+              "volunteering the real reason in their own words and committing to something they chose. Score 3 if " +
+              "they opened up but the commitment came from the coach. Score 2 if they stayed polite and compliant " +
+              "without ever opening. Score 0 if the coach settled for surface agreement and never noticed it was " +
+              "surface. IMPORTANT: if the teammate genuinely opened up, the coach succeeded here — score it high. " +
+              "Do not mark down a session that worked for having encountered no resistance.\n"
+            : "") +
+          "OUTPUT RULES: every key below is REQUIRED — never omit a stage, never stop early.\n" +
+          "\"did\" describes what the COACH actually did to earn this score, in the past tense, naming the concrete " +
+          "move: 'mentioned his AC savings goal before touching any metric', 'said he listened to three calls and " +
+          "played the recording back', 'asked why the KB was not used, then followed the answer to habit and tab " +
+          "visibility'. Under 25 words. Never a generic tip, never advice — only what happened.\n" +
+          "\"quote\" is the coach's own words at the strongest moment, under 12 words, verbatim.\n" +
+          "\"fix\" is ONLY for scores below 4 — the concrete thing to do instead, under 25 words. When the score is " +
+          "4, return an empty string for fix. Do not pad a 4 with advice.\n" +
+          "If a stage did not happen at all, set did to 'not in the transcript' and quote to an empty string.\n" +
           'Return ONLY JSON: {"scores":{' +
-          activeRubric.map((r) => '"' + r.key + '":{"score":0,"evidence":"under 15 words","fix":"under 25 words"}').join(",") +
+          activeRubric.map((r) => '"' + r.key + '":{"score":0,"did":"under 25 words","quote":"under 12 words","fix":"empty if score is 4"}').join(",") +
           '},"did_well":["2 short items, each under 20 words"],' +
           '"do_differently":["2 short items, each under 25 words, phrased as the line to say instead"],' +
           '"headline":"one sentence"}',
@@ -1902,6 +1922,88 @@ function Practice({ handoff, onClearHandoff }) {
     return { typed, inserted, pastes, pct, impossible, level, turns: turnMeta.length,
       pastedTurns: turnMeta.filter((t) => t.inserted > 0).length };
   }, [turnMeta]);
+
+  function transcriptText() {
+    const head = "COACHING SESSION\n" + agent.name + " \u2014 " + agent.tag +
+      (agent.disc ? " (" + agent.disc + ")" : "") + "\n" + programName + " \u2014 " + topic +
+      "\n" + new Date().toLocaleString() + "\n" + "=".repeat(60) + "\n\n";
+    return head + turns.map((t) => (t.role === "user" ? "COACH: " : agent.name.toUpperCase() + ": ") + t.content).join("\n\n");
+  }
+
+  function downloadTranscript() {
+    const safe = agent.name.toLowerCase() + "-session";
+    download(new Blob([transcriptText()], { type: "text/plain" }), safe + "-transcript.txt");
+  }
+
+  function downloadReport() {
+    const esc = (x) => String(x == null ? "" : x)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    let h = "<!doctype html><html><head><meta charset='utf-8'><title>" + esc(agent.name) +
+      " \u2014 coaching session</title>" +
+      "<link href='https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;500;600;700&display=swap' rel='stylesheet'>" +
+      "<style>" + PRINT_CSS + `
+      .stage{page-break-inside:avoid;margin-bottom:6mm;padding-left:12mm;position:relative}
+      .badge{position:absolute;left:0;top:0;width:8mm;height:8mm;border-radius:50%;color:#fff;
+        font-family:Anton,sans-serif;font-size:10pt;display:flex;align-items:center;justify-content:center}
+      .s4{background:#1F8A4C}.s3{background:#1F8A4C}.s2{background:#B5760A}.s1{background:#C0202A}.s0{background:#C0202A}
+      .stage h4{margin:0 0 1mm;font-size:11pt}
+      .did{margin:0 0 1.5mm;font-size:9.5pt}
+      .quote{margin:0 0 1.5mm;font-size:9pt;color:#555;font-style:italic;border-left:1pt solid #ccc;padding-left:3mm}
+      .fix{margin:0;font-size:9.5pt;color:#C0202A}
+      .turn{margin:0 0 2mm;font-size:9.5pt}.turn b{color:#101010}
+      .printbar{position:fixed;top:0;left:0;right:0;background:#101010;color:#fff;padding:10px 16px;
+        font-size:13px;font-family:Archivo,sans-serif;z-index:99}
+      .printbar button{background:#C0202A;color:#fff;border:0;padding:7px 14px;font:inherit;
+        font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:11px;cursor:pointer;margin-left:12px}
+      body{padding-top:46px}@media print{.printbar{display:none}body{padding-top:0}}
+      ` + "</style></head><body>" +
+      "<div class='printbar'><b>Ready to save.</b> Press Ctrl+P (Cmd+P on Mac) and choose Save as PDF." +
+      "<button onclick='window.print()'>Print now</button></div>";
+
+    h += "<section class='pg'><h2>Coaching session \u2014 " + esc(agent.name) + "</h2><table class='pg-meta'><tbody>";
+    [["Teammate", agent.name + " \u2014 " + agent.tag], ["DISC style", agent.disc || "\u2014"],
+     ["Account", programName], ["Behaviour coached", topic],
+     ["Date", new Date().toLocaleString()], ["Turns", String(turns.filter((t) => t.role === "user").length)]]
+      .forEach(([k, v]) => { h += "<tr><td>" + esc(k) + "</td><td>" + esc(v) + "</td></tr>"; });
+    h += "</tbody></table>";
+
+    if (card) {
+      h += "<h2>Scorecard</h2><table class='pg-table'><thead><tr>";
+      card.cols.forEach((c) => (h += "<th>" + esc(c) + "</th>"));
+      h += "</tr></thead><tbody>";
+      card.rows.forEach((r) => { h += "<tr>"; r.forEach((v) => (h += "<td>" + esc(v) + "</td>")); h += "</tr>"; });
+      h += "</tbody></table>";
+    }
+
+    if (score) {
+      h += "<h2>The COACH path</h2>";
+      activeRubric.forEach((r) => {
+        const sc = score.scores && score.scores[r.key];
+        if (!sc) return;
+        h += "<div class='stage'><div class='badge s" + (sc.score || 0) + "'>" + esc(r.letter) + "</div>" +
+          "<h4>" + esc(r.label) + " \u2014 " + (sc.score || 0) + "/4</h4>" +
+          "<p class='did'>" + esc(sc.did || sc.evidence) + "</p>";
+        if (sc.quote) h += "<p class='quote'>\u201c" + esc(sc.quote) + "\u201d</p>";
+        if (sc.fix) h += "<p class='fix'>" + esc(sc.fix) + "</p>";
+        h += "</div>";
+      });
+      h += "<h3>Change this first</h3><p>" + esc(score.headline) + "</p>";
+      if (score.did_well) h += "<h3>What you did well</h3><ul>" +
+        score.did_well.map((d) => "<li>" + esc(d) + "</li>").join("") + "</ul>";
+      if (score.do_differently) h += "<h3>Do differently next time</h3><ul>" +
+        score.do_differently.map((d) => "<li>" + esc(d) + "</li>").join("") + "</ul>";
+      if (authorship) h += "<p class='quote'>Own work: " + authorship.pct + "% of characters pasted or bulk-inserted across " +
+        authorship.turns + " turns.</p>";
+    }
+    h += "</section><section class='pg'><h2>Transcript</h2>";
+    turns.forEach((t) => {
+      h += "<p class='turn'><b>" + (t.role === "user" ? "Coach" : esc(agent.name)) + ":</b> " + esc(t.content) + "</p>";
+    });
+    h += "</section></body></html>";
+
+    const safe = agent.name.toLowerCase() + "-session";
+    download(new Blob([h], { type: "text/html" }), safe + "-report-print-me.html");
+  }
 
   if (!started) {
     return (
@@ -2119,8 +2221,9 @@ function Practice({ handoff, onClearHandoff }) {
                   {!score && r.hint && <p className="cl-hint">{r.hint}</p>}
                   {sc && (
                     <>
-                      <p className="cl-ev">{sc.evidence}</p>
-                      <p className="cl-fix">{sc.fix}</p>
+                      {(sc.did || sc.evidence) && <p className="cl-did">{sc.did || sc.evidence}</p>}
+                      {sc.quote && <p className="cl-ev">\u201c{sc.quote}\u201d</p>}
+                      {sc.fix && <p className="cl-fix">{sc.fix}</p>}
                     </>
                   )}
                 </div>
@@ -2146,6 +2249,15 @@ function Practice({ handoff, onClearHandoff }) {
                 <ul className="cl-dd">{score.do_differently.map((d, i) => <li key={i}>{d}</li>)}</ul>
               </>
             )}
+          </div>
+        )}
+
+        {turns.length > 0 && (
+          <div className="cl-dl-row">
+            <button className="cl-btn cl-ghost cl-small" onClick={downloadTranscript}>Transcript .txt</button>
+            <button className="cl-btn cl-ghost cl-small" onClick={downloadReport}>
+              {score ? "Full report" : "Report so far"}
+            </button>
           </div>
         )}
 
@@ -2329,6 +2441,7 @@ const CSS = `
 .cl-n-part .cl-node-score { color: #B5760A; }
 .cl-n-miss .cl-node-dot { border-color: var(--red); background: var(--red); color: var(--white); }
 .cl-n-miss .cl-node-score { color: var(--red); }
+.cl-dl-row { display: flex; gap: 6px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
 .cl-debrief { margin-top: 18px; padding-top: 16px; border-top: 2px solid var(--red); }
 .cl-dw, .cl-dd { margin: 0; padding-left: 17px; }
 .cl-dw li, .cl-dd li { font-size: 12.5px; margin-bottom: 6px; }
@@ -2457,8 +2570,9 @@ const CSS = `
 .cl-beh-note { display: block; font-size: 11.5px; color: var(--soft); margin-top: 3px; line-height: 1.35; }
 
 .cl-rail { background: var(--white); border: 1px solid var(--line); padding: 18px; }
+.cl-did { font-size: 12.5px; margin: 5px 0 4px; }
 .cl-ev { font-size: 11.5px; color: var(--soft); margin: 0 0 5px; padding-left: 9px; border-left: 2px solid var(--line); font-style: italic; }
-.cl-fix { font-size: 12.5px; margin: 0; }
+.cl-fix { font-size: 12.5px; margin: 0; padding: 6px 9px; background: var(--red-wash); border-left: 2px solid var(--red); }
 .cl-headline { font-size: 14.5px; font-weight: 600; margin: 0 0 8px; }
 .cl-kept { font-size: 13px; color: var(--soft); margin: 0; }
 
