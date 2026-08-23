@@ -1,0 +1,2087 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Coach Lab</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23101010'/%3E%3Cpath d='M4 0h12L10 32H-2z' fill='%237C1219'/%3E%3C/svg%3E" />
+
+<!-- Everything loads from a CDN. No build step, no npm, no node_modules. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin></script>
+
+<style>
+  body { margin: 0; background: #F4F4F4; }
+  #boot { font-family: system-ui, sans-serif; padding: 60px 28px; color: #6E6E6E; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="root"><div id="boot">Loading Coach Lab&hellip;</div></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect } = React;
+
+
+/* ================================================================== */
+/*  COACH LAB                                                          */
+/*  1. Case Study — account, metrics, transcripts, answer key, export  */
+/*  2. Practice   — scenario library, roleplay, scored rubric          */
+/* ================================================================== */
+
+/* ------------------------------------------------------------------ *
+ *  DEPLOYMENT SWITCH — change this one line before you ship.
+ *
+ *  Preview inside Claude:  "https://api.anthropic.com/v1/messages"
+ *  Live on a website:      "/api/claude"
+ *
+ *  The live value routes through deploy/api/claude.js, which holds the
+ *  API key server-side. Shipping the preview value to a real site means
+ *  every request returns 401 and nothing generates.
+ * ------------------------------------------------------------------ */
+const API_URL = "/api/claude";  // deployed value — routes through api/claude.js
+
+const MODEL = "claude-sonnet-4-6";
+
+async function callClaude({ system, messages, maxTokens = 1000 }) {
+  let res;
+  try {
+    res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages }),
+    });
+  } catch (netErr) {
+    throw new Error("Could not reach the model — check your connection.");
+  }
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403)
+      throw new Error("Not authorised (" + res.status + "). On the deployed site, set API_URL to '/api/claude' " +
+        "and check ANTHROPIC_API_KEY is set.");
+    if (res.status === 404)
+      throw new Error("Endpoint not found (404) — API_URL points somewhere that does not exist.");
+    if (res.status === 429)
+      throw new Error("Rate limited (429) — wait a moment and try again.");
+    throw new Error("Request failed (" + res.status + ")");
+  }
+  const data = await res.json();
+  return (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+}
+
+function repairJSON(text) {
+  let t = text.replace(/,\s*$/, "");
+  const stack = [];
+  let inStr = false, esc = false;
+  for (const ch of t) {
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  if (inStr) t += '"';                       // close a string cut mid-word
+  t = t.replace(/,\s*$/, "");
+  while (stack.length) t += stack.pop() === "{" ? "}" : "]";
+  return t;
+}
+
+function parseJSON(raw) {
+  const c = raw.replace(/```json/g, "").replace(/```/g, "").trim();
+  const s = c.indexOf("{");
+  if (s === -1) throw new Error("No JSON object in response");
+  const e = c.lastIndexOf("}");
+  const whole = e > s ? c.slice(s, e + 1) : null;
+  if (whole) { try { return JSON.parse(whole); } catch (err) { /* fall through */ } }
+  // Truncated output: close what is open and keep the complete parts.
+  try { return JSON.parse(repairJSON(c.slice(s))); } catch (err) {
+    // Last resort: drop the final incomplete array element and try again.
+    const cut = c.slice(s).lastIndexOf("],");
+    if (cut > 0) { try { return JSON.parse(repairJSON(c.slice(s, cut + 1))); } catch (e2) { /* noop */ } }
+    throw new Error("Could not parse response (" + c.length + " chars, likely truncated)");
+  }
+}
+
+async function callJSON(opts, retries = 2) {
+  let last;
+  for (let i = 0; i <= retries; i++) {
+    try { return parseJSON(await callClaude(opts)); } catch (e) { last = e; }
+  }
+  throw last;
+}
+
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function toSecs(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  const clock = s.match(/^(\d+):([0-5]\d)$/);
+  if (clock) return parseInt(clock[1], 10) * 60 + parseInt(clock[2], 10);
+  const mins = s.match(/([\d.]+)\s*min/i);
+  if (mins) return Math.round(parseFloat(mins[1]) * 60);
+  const num = s.match(/([\d.]+)/);
+  return num ? Math.round(parseFloat(num[1])) : null;
+}
+function fmtSecs(n) {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  const m = Math.floor(n / 60);
+  const s = Math.round(n % 60);
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+/* ============================= SHELL ============================== */
+
+const TABS = [
+  { id: "practice", label: "Practice", sub: "Coach 13 scenarios" },
+  { id: "case", label: "Case Study", sub: "Facilitator build tools" },
+];
+
+/* Facilitator gate. Client-side only — this keeps learners out of the answer keys,
+   it is not security. Real access control is the middleware in deploy/. */
+const BUILDER_PASSWORD = "coachplan";
+
+function BuilderGate({ onUnlock }) {
+  const [pw, setPw] = useState("");
+  const [bad, setBad] = useState(false);
+  function tryUnlock() {
+    if (pw === BUILDER_PASSWORD) onUnlock();
+    else { setBad(true); setPw(""); }
+  }
+  return (
+    <div className="cl-gate">
+      <div className="cl-gate-box">
+        <div className="cl-gate-slash" aria-hidden="true" />
+        <p className="cl-eyebrow">Facilitators only</p>
+        <h2 className="cl-h2">The case builder is locked</h2>
+        {bad && <p className="cl-error"><strong>Wrong password</strong> — try again.</p>}
+        <input type="password" value={pw} autoFocus placeholder="Password"
+          onChange={(e) => { setPw(e.target.value); setBad(false); }}
+          onKeyDown={(e) => e.key === "Enter" && tryUnlock()} />
+        <button className="cl-btn cl-go" onClick={tryUnlock}>Unlock</button>
+      </div>
+    </div>
+  );
+}
+
+class Boundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { console.error("Coach Lab crashed:", err, info); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div className="cl">
+        <style>{CSS}</style>
+        <div className="cl-gate">
+          <div className="cl-gate-box">
+            <div className="cl-gate-slash" aria-hidden="true" />
+            <p className="cl-eyebrow">Something broke</p>
+            <h2 className="cl-h2">This screen stopped working</h2>
+            <p className="cl-lede">
+              Nothing you downloaded is affected. Reloading starts a fresh session — anything
+              generated but not yet downloaded will be lost.
+            </p>
+            <p className="cl-fine">{String(this.state.err && this.state.err.message)}</p>
+            <button className="cl-btn cl-go" onClick={() => window.location.reload()}>Reload</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+
+function CoachLabRoot() {
+  return <Boundary><CoachLab /></Boundary>;
+}
+
+function CoachLab() {
+  const [tab, setTab] = useState("practice");
+  const [handoff, setHandoff] = useState(null);
+  const [unlocked, setUnlocked] = useState(false);
+
+  function coachThisTeammate(payload) {
+    setHandoff(payload);
+    setTab("practice");
+  }
+  return (
+    <div className="cl">
+      <style>{CSS}</style>
+      <div className="cl-app">
+        <header className="cl-top">
+          <div className="cl-slash" aria-hidden="true" />
+          <div className="cl-brand">
+            <h1>Coach Lab</h1>
+            <p>Case studies, practice and facilitation for team leads</p>
+          </div>
+          <nav className="cl-tabs" aria-label="Sections">
+            {TABS.map((t) => (
+              <button key={t.id} className={"cl-tab" + (tab === t.id ? " is-on" : "")}
+                onClick={() => setTab(t.id)} aria-current={tab === t.id ? "page" : undefined}>
+                <span className="cl-tab-label">{t.label}{t.id === "case" && !unlocked ? " \u00b7 Locked" : ""}</span>
+                <span className="cl-tab-sub">{t.sub}</span>
+              </button>
+            ))}
+          </nav>
+        </header>
+        <main className="cl-main">
+          {tab === "practice" && <Practice handoff={handoff} onClearHandoff={() => setHandoff(null)} />}
+          {tab === "case" && (unlocked
+            ? <CaseStudy onCoach={coachThisTeammate} />
+            : <BuilderGate onUnlock={() => setUnlocked(true)} />)}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+/* ========================= 1. CASE STUDY ========================== */
+
+const ACCOUNTS = [
+  { id: "paypal", name: "PayPal", sector: "Digital payments / fintech", channel: "Blended",
+    drivers: ["Unauthorized transaction dispute", "Account limitation review", "Payment on hold or pending",
+      "Refund not received", "Login and 2FA recovery", "Chargeback and seller protection"] },
+  { id: "tmobile", name: "T-Mobile", sector: "Telecommunications", channel: "Voice",
+    drivers: ["Bill shock and unexpected charges", "Network or coverage complaint", "Device upgrade and trade-in",
+      "Plan change and add-a-line", "Port-in and port-out", "Device protection claim"] },
+  { id: "shopee", name: "Shopee", sector: "E-commerce marketplace", channel: "Chat",
+    drivers: ["Order not received", "Return and refund request", "Seller dispute",
+      "Voucher or promo not applied", "ShopeePay wallet issue", "Cancelled order follow-up"] },
+  { id: "monee", name: "Monee", sector: "Digital lending and wallet", channel: "Chat",
+    drivers: ["Loan application status", "Repayment and due date", "Credit limit review",
+      "Failed disbursement", "Late payment and penalty", "Account verification"] },
+  { id: "dominos", name: "Domino's", sector: "Food delivery", channel: "Voice",
+    drivers: ["Late or missing delivery", "Wrong or incomplete order", "Order quality complaint",
+      "Refund or remake request", "Order placement and store locator", "Loyalty points issue"] },
+  { id: "lendingtree", name: "LendingTree", sector: "Financial marketplace", channel: "Voice",
+    drivers: ["Loan match follow-up", "Rate quote inquiry", "Credit pull dispute",
+      "Lender contact complaint", "Do-not-call and unsubscribe", "Application document upload"] },
+  { id: "clearcover", name: "Clearcover", sector: "Auto insurance", channel: "Blended",
+    drivers: ["First notice of loss", "Claim status follow-up", "Policy change or endorsement",
+      "Premium and billing question", "Roadside assistance", "Proof of insurance request"] },
+  { id: "dhgate", name: "DHgate", sector: "Cross-border e-commerce", channel: "Chat",
+    drivers: ["Shipment tracking and customs delay", "Item not as described", "Refund and dispute escalation",
+      "Bulk order inquiry", "Payment failed", "Seller unresponsive"] },
+  { id: "radlife", name: "Rad Life Mobility", sector: "Mobility equipment retail", channel: "Voice",
+    drivers: ["Order and delivery status", "Assembly and setup support", "Warranty and parts replacement",
+      "Insurance and funding paperwork", "Product fit and sizing", "Repair scheduling"] },
+  { id: "viome", name: "Viome", sector: "Health testing and supplements", channel: "Blended",
+    drivers: ["Test kit not received", "Sample rejected or retest", "Results interpretation",
+      "Subscription and billing", "Supplement order issue", "Shipping delay"] },
+  { id: "custom", name: "Other account", sector: "", channel: "Voice", drivers: [] },
+];
+const CHANNELS = ["Voice", "Chat", "Blended"];
+const DISC = ["High D", "High I", "High S", "High C"];
+const STAR = [
+  "Rising Star (motivated, performance still low)",
+  "Star (high performance, high motivation)",
+  "Solid (meets standard, steady)",
+  "Fading (was strong, now slipping)",
+  "At Risk (low performance, low motivation)",
+];
+const KPMS = ["AHT", "CSAT", "FCR", "Transfer Rate", "Quality Score", "Sales Conversion", "Hold Time", "Resolution Rate"];
+const BEHAVIOURS = [
+  "Long holds / dead air", "Weak empathy and acknowledgement", "Not probing, jumps to solution",
+  "Over-explaining, poor call control", "Poor tools utilization",
+  "Skipping the recap and next steps", "Compliance / verification shortcuts",
+];
+const DIFFICULTY = ["Clear-cut", "Realistic", "Messy (mixed signals)"];
+
+const ACTIVITIES = [
+  { id: "assess", title: "Assess Performance",
+    prompt: "Review decile, stack rank and KPMs. Which KPM offers the greatest opportunity for achieving and maintaining balance? Why?",
+    ask: "Name the focus KPM, its standard, the actual score for the latest pay period, the size of the gap versus the previous period, and a sanction recommendation (No sanction / Verbal Warning / Focus Alert / Final Focus Alert). Worksheet shape, not prose." },
+  { id: "kpi", title: "Key Performance Indicators",
+    prompt: "Which KPI has the greatest impact on the KPM?",
+    ask: "Name the 1-2 focus KPIs driving the KPM, give their actual scores for the latest pay period, and state how each moved versus the previous period with the numbers." },
+  { id: "ksb", title: "Determine the Behavior",
+    prompt: "What KSB is your teammate doing or not doing that has the greatest impact on the KPM/KPI? What should they do differently, and why does it matter?",
+    ask: "Exactly two specific KSBs to reinforce or maintain, and exactly two specific trended, most impactful KSBs to redirect. Short noun phrases. Each redirect KSB must cite the contact ID and timestamp where it is visible." },
+  { id: "root", title: "Possible Root Causes",
+    prompt: "Brainstorm why the teammate is performing this way. Consider tenure, profile and experience.",
+    ask: "Two short paragraphs headed Knowledge Gap and Skill Gap, each tied to this teammate's tenure, DISC style and background, and each pointing to a specific moment in one of the transcripts." },
+  { id: "questions", title: "Questions to Uncover the Real Root Cause",
+    prompt: "What questions can you ask the teammate to uncover the root cause, from the teammate's perspective? Consider the main reasons behaviors do not change.",
+    ask: "Four numbered open questions a coach would say out loud, at least two referencing a specific call moment. Invite the teammate to reconstruct their own thinking rather than defend themselves. No leading questions, no yes/no." },
+  { id: "smart", title: "Possible SMART Action Plan",
+    prompt: "Rewrite the action plan so it uses the SMART components. Include how you are holding the teammate accountable.",
+    ask: "Three parts. A SMART plan in the teammate's voice ('I will...') with a target number, a deadline tied to the next pay period, the named call driver, and a verification method. Then the coaching goal. Then how the coach wants the teammate to feel, three words or fewer." },
+];
+
+const STEPS = ["Account", "Metrics", "Transcripts", "Answer key", "Export"];
+
+function CaseStudy({ onCoach }) {
+  const [step, setStep] = useState(0);
+  const [p, setP] = useState({
+    account: "paypal", customAccount: "", customSector: "",
+    channel: "Blended", driver: "", driverMode: "list",
+    name: "", tenure: "95 days", disc: "High D", discNote: "",
+    attendance: "98%", star: STAR[0], context: "",
+    kpm: "AHT", behaviour: "Long holds / dead air", difficulty: "Realistic",
+  });
+  const [metrics, setMetrics] = useState(null);
+  const [scripts, setScripts] = useState([]);
+  const [answers, setAnswers] = useState([]);
+  const [busy, setBusy] = useState("");
+  const [prog, setProg] = useState(0);
+  const [error, setError] = useState("");
+  const [showKey, setShowKey] = useState(true);
+  const [printMode, setPrintMode] = useState("key");
+
+  const set = (k, v) => setP((x) => ({ ...x, [k]: v }));
+
+  const acct = ACCOUNTS.find((a) => a.id === p.account) || ACCOUNTS[0];
+  const isCustom = p.account === "custom";
+  const accountName = isCustom ? (p.customAccount.trim() || "Unnamed account") : acct.name;
+  const sector = isCustom ? (p.customSector.trim() || "Customer service") : acct.sector;
+  const accountLine = accountName + " · " + sector + " · " + p.channel + (p.driver ? " · " + p.driver : "");
+
+  function pickAccount(id) {
+    const a = ACCOUNTS.find((x) => x.id === id) || ACCOUNTS[0];
+    setP((x) => ({ ...x, account: id, channel: a.channel || x.channel, driver: "", driverMode: "list" }));
+    setMetrics(null); setScripts([]); setAnswers([]); setStep(0); setError("");
+  }
+
+  async function invent() {
+    setBusy("invent"); setError("");
+    try {
+      const j = await callJSON({
+        system:
+          "You invent realistic teammates for coaching case studies in a Philippine BPO. The account is a real " +
+          "company the BPO supports; the teammate is fictional. Return ONLY JSON, no fences: " +
+          '{"driver":"the specific contact reason this teammate handles on this account",' +
+          '"name":"Filipino full name","tenure":"e.g. 95 days","disc":"High D|High I|High S|High C",' +
+          '"discNote":"how that style shows up at work; semicolon separated traits",' +
+          '"attendance":"e.g. 98%","context":"two facts about motivation and life situation, semicolon separated"}',
+        messages: [{ role: "user", content:
+          "Account: " + accountName + " (" + sector + ")\nChannel: " + p.channel + "\nStar status: " + p.star +
+          "\nProblem KPM: " + p.kpm + "\nProblem behaviour: " + p.behaviour +
+          (p.driver ? "\nKeep this contact driver: " + p.driver : "") }],
+        maxTokens: 600,
+      });
+      setP((x) => ({ ...x, ...j, driverMode: (acct.drivers || []).includes(j.driver) ? "list" : "custom" }));
+    } catch (e) { setError(e.message || "Could not generate the teammate. Try again."); }
+    setBusy("");
+  }
+
+  async function buildMetrics() {
+    if (!p.name.trim()) { setError("Give the teammate a name first."); return; }
+    setBusy("metrics"); setError("");
+    try {
+      const j = await callJSON({
+        system:
+          "You generate performance trend tables for contact centre coaching case studies. " +
+          "Choose metric columns that fit the industry and channel — voice accounts use AHT, Average Talk Time, ACW, " +
+          "Hold Time, Transfer Rate, FCR, CSAT; chat accounts use AHT, First Response Time, Concurrency, Resolution " +
+          "Rate, CSAT; regulated accounts add a compliance or verification metric. First column is always Pay Period. " +
+          "Put a Standard column immediately after each metric that has one, and always include one for the problem KPM.\n" +
+          "The table must be diagnosable: the problem KPM clearly breaches standard and worsens across the three " +
+          "periods, one or two driver KPIs move in step with it, and at least two other metrics improve so there is " +
+          "something genuinely worth reinforcing. Numbers must be internally consistent — talk time, ACW and hold time " +
+          "should broadly track AHT. Use realistic values, never round numbers.\n" +
+          'Return ONLY JSON, no fences: {"columns":["Pay Period","CSAT","CSAT Standard","AHT","AHT Standard",...],' +
+          '"rows":[[...],[...],[...]],"story":"one sentence a facilitator could say about what the numbers show"}\n' +
+          'Exactly three rows, three consecutive half-month pay periods. Keep units inside cells ("710 secs", "2:30", "75%").',
+        messages: [{ role: "user", content:
+          "Account: " + accountLine + "\nTeammate: " + p.name + "\nTenure: " + p.tenure +
+          "\nDISC: " + p.disc + "\nStar status: " + p.star + "\nProblem KPM: " + p.kpm +
+          "\nProblem behaviour: " + p.behaviour + "\nDifficulty: " + p.difficulty +
+          (p.difficulty === "Messy (mixed signals)" ? " — include one metric that misleads a careless reader." : "") }],
+        maxTokens: 1000,
+      });
+      setMetrics(j); setScripts([]); setAnswers([]); setStep(1);
+      if (!j.columns.some((c) => /AHT|Handle/i.test(c) && !/standard/i.test(c))) {
+        setError("No handle-time column in this table — the transcripts will be built against a 600s default. " +
+          "Rename a column to AHT or regenerate.");
+      }
+    } catch (e) { setError(e.message || "Metrics did not generate cleanly. Try again."); }
+    setBusy("");
+  }
+
+  function editCell(r, c, v) {
+    setMetrics((m) => {
+      const rows = m.rows.map((row) => [...row]);
+      rows[r][c] = v;
+      return { ...m, rows };
+    });
+  }
+
+  function latestVal(frag) {
+    if (!metrics) return null;
+    const i = metrics.columns.findIndex((c) => new RegExp(frag, "i").test(c) && !/standard/i.test(c));
+    if (i === -1) return null;
+    return metrics.rows[metrics.rows.length - 1][i];
+  }
+
+  async function buildScripts() {
+    setBusy("scripts"); setError(""); setProg(0);
+    setScripts([]); setAnswers([]);                    // downstream state is now stale
+    const table = metrics.columns.join(" | ") + "\n" + metrics.rows.map((r) => r.join(" | ")).join("\n");
+    const ahtRaw = toSecs(latestVal("^AHT|Handle"));
+    const aht = ahtRaw || 600;
+    const hold = toSecs(latestVal("Hold")) || 0;
+    const acw = toSecs(latestVal("ACW")) || 0;
+    // AHT = talk + hold + ACW, so the conversation itself runs AHT minus wrap.
+    const talk = toSecs(latestVal("Talk")) || Math.max(60, aht - hold - acw);
+    const convo = talk + hold;
+    const period = metrics.rows[metrics.rows.length - 1][0];
+    const resolvedDriver = p.driver || "the account's most common contact reason";
+    // A long call is not more turns — it is the same turns with visible dead time between them.
+    const targetTurns = Math.max(10, Math.min(18, Math.round(convo / 55)));
+
+    const sys =
+      "You write realistic contact centre " + (p.channel === "Chat" ? "chat" : "call") + " transcripts that serve as " +
+      "evidence in a coaching case study. The transcript is the proof of the behaviour — a facilitator must be able " +
+      "to point at a timestamp and say 'there it is'.\n" +
+      "HARD CONSTRAINTS:\n" +
+      "- Handle time is talk + hold + after-call work. The CONVERSATION you write covers talk + hold only; wrap " +
+      "happens after the customer is gone and is never in the transcript.\n" +
+      "- THE FINAL TIMESTAMP MUST BE APPROXIMATELY " + fmtSecs(convo) + " (" + convo + " seconds). This is the single " +
+      "most important constraint. A transcript that ends at 4:00 when the target is " + fmtSecs(convo) + " is a " +
+      "failed transcript, because the whole case study rests on this call being long.\n" +
+      "- Do NOT reach that length by writing more turns. Reach it the way a real slow call gets slow: leave real " +
+      "gaps between timestamps and account for them. Use System lines for the dead time — 'Agent searching order " +
+      "system — 40 seconds of silence', 'Placed customer on hold — 1:20', 'Agent re-verifying account details — " +
+      "35 seconds'. Show the agent re-explaining something already covered, re-asking for information the customer " +
+      "already gave, or narrating their own clicking. Gaps of 30 to 90 seconds between turns are normal on a call " +
+      "this long and are exactly what the coach needs to see.\n" +
+      "- Hold must total roughly " + hold + " seconds across the contact. If hold is near zero, do not invent holds " +
+      "— carry the length through dead air and over-explaining instead.\n" +
+      "- The contact must be dated inside the pay period " + period + ".\n" +
+      "- Every evidence timestamp must be copied exactly from one of the turns you wrote.\n" +
+      "- The problem behaviour is: " + p.behaviour + ". It must be visibly, specifically present — demonstrated in " +
+      "what the agent actually says, never described.\n" +
+      "- Include at least one genuine strength so the case is not a hit piece.\n" +
+      "- The customer is a real person with a real problem, not a prop. Keep turns short and natural.\n" +
+      "- Sound like this specific account. Use the product names, screens, policies, timeframes and jargon a real " +
+      "agent on " + accountName + " would use — not generic 'your account' filler. The customer's problem must be " +
+      "one that only makes sense on this account.\n" +
+      'Return ONLY JSON, no fences. Use this COMPACT shape exactly — short keys, turns and evidence as arrays:\n' +
+      '{"id":"CN-4471902","date":"a date inside ' + period + '","driver":"the contact reason",' +
+      '"dur":' + convo + ',"talk":' + talk + ',"hold":' + hold + ',"acw":' + acw + ',"disp":"Resolved","out":"one line on how it ended",' +
+      '"t":[["00:00","A","what the agent says"],["01:10","C","what the customer says"],["03:20","S","Placed customer on hold — 1:20"]],' +
+      '"e":[["03:20","miss","short KSB name","what this moment shows"]]}\n' +
+      'Speakers are "A" for agent, "C" for customer, "S" for system. dur, talk, hold and acw are plain numbers of seconds.\n' +
+      "About " + targetTurns + " turns, spread across the full " + fmtSecs(convo) + ". Exactly 3 evidence entries. " +
+      "Every turn under 24 words. Keep the wording tight — a truncated response is useless — but keep the CLOCK long.";
+
+    const SPEAKER = { A: "Agent", C: "Customer", S: "System" };
+    function normalize(j, i) {
+      // Accepts the compact shape, and the older verbose shape if the model reverts to it.
+      const turnsRaw = j.t || j.turns || [];
+      const evRaw = j.e || j.evidence || [];
+      const turns = turnsRaw.map((x) => Array.isArray(x)
+        ? { t: String(x[0] || ""), speaker: SPEAKER[x[1]] || x[1] || "Agent", text: String(x[2] || "") }
+        : { t: x.t, speaker: x.speaker, text: x.text });
+      const evidence = evRaw.map((x) => Array.isArray(x)
+        ? { t: String(x[0] || ""), type: x[1] === "strength" ? "strength" : "miss", ksb: x[2] || "", note: x[3] || "" }
+        : { t: x.t, type: x.type, ksb: x.ksb, note: x.note });
+      const talkN = Number(j.talk ?? j.talk_secs) || 0;
+      const holdN = Number(j.hold ?? j.hold_secs) || 0;
+      // Trust the clock, not the self-reported number. A transcript that ends at 4:00
+      // is a 4:00 contact no matter what the model puts in "dur".
+      const lastStamp = turns.length ? toSecs(turns[turns.length - 1].t) : null;
+      const claimed = Number(j.dur ?? j.duration_secs) || talkN + holdN;
+      const actual = lastStamp || claimed;
+      return {
+        contact_id: j.id || j.contact_id || "CN-" + (i + 1),
+        date: j.date || period,
+        driver: j.driver || resolvedDriver,
+        duration_secs: actual,
+        claimed_secs: claimed,
+        short: actual < convo * 0.7,
+        talk_secs: talkN, hold_secs: holdN,
+        acw_secs: Number(j.acw ?? j.acw_secs) || 0,
+        disposition: j.disp || j.disposition || "Resolved",
+        outcome: j.out || j.outcome || "",
+        turns, evidence,
+      };
+    }
+
+    const out = [];
+    const failures = [];
+    for (let i = 0; i < 3; i++) {
+      try {
+        const j = await callJSON({
+          system: sys,
+          messages: [{ role: "user", content:
+            "Account: " + accountLine +
+            "\nContact driver for all three contacts: " + resolvedDriver +
+            "\nAgent: " + p.name + ", tenure " + p.tenure + ", DISC " + p.disc + " (" + p.discNote + ")" +
+            "\nProblem KPM: " + p.kpm + "\nPay period: " + period +
+            "\n\nFull trend:\n" + table +
+            "\n\nThis is contact " + (i + 1) + " of 3. Same driver, different customer and different flavour of the " +
+            "same problem. Vary the length slightly around the target so the three average out to it." +
+            (i === 2 ? " Make this one the clearest example of the problem behaviour." : "") }],
+          maxTokens: 1000,
+        });
+        let n = normalize(j, i);
+        if (!n.turns.length) throw new Error("no turns returned");
+        if (n.short) {
+          // The clock came back too short. Ask again, naming the failure explicitly.
+          try {
+            const j2 = await callJSON({
+              system: sys,
+              messages: [{ role: "user", content:
+                "Account: " + accountLine + "\nDriver: " + resolvedDriver +
+                "\nAgent: " + p.name + " (" + p.disc + ")\nPay period: " + period +
+                "\n\nYour previous attempt ended at " + fmtSecs(n.duration_secs) + ", but this contact must run " +
+                "about " + fmtSecs(convo) + ". Rewrite it. Keep roughly the same number of turns and the same story, " +
+                "but stretch the CLOCK: bigger gaps between timestamps, System lines accounting for the dead time, " +
+                "the agent re-explaining and re-verifying. The final timestamp must be close to " + fmtSecs(convo) + "." }],
+              maxTokens: 1000,
+            });
+            const n2 = normalize(j2, i);
+            if (n2.turns.length && n2.duration_secs > n.duration_secs) n = n2;
+          } catch (e2) { /* keep the short one and let the badge flag it */ }
+        }
+        out.push(n);
+      } catch (e) {
+        failures.push("Contact " + (i + 1) + ": " + (e && e.message ? e.message : "unknown error"));
+        out.push({ failed: true, contact_id: "Contact " + (i + 1), reason: e && e.message });
+      }
+      setScripts([...out]); setProg(i + 1);
+    }
+    if (failures.length) setError(failures.join(" · ") + " — press Regenerate to retry just these.");
+    setBusy(""); setStep(2);
+  }
+
+  const ALIGN_TOLERANCE = 15;
+
+  const check = React.useMemo(() => {
+    if (!metrics || scripts.length === 0) return null;
+    const ok = scripts.filter((s) => !s.failed);
+    if (!ok.length) return null;
+    const avg = (k) => Math.round(ok.reduce((a, s) => a + (Number(s[k]) || 0), 0) / ok.length);
+    const talkAvg = avg("talk_secs"), holdAvg = avg("hold_secs"), acwAvg = avg("acw_secs");
+    return [
+      // AHT = talk + hold + ACW, so the contacts' AHT is rebuilt from its parts, not read off duration.
+      { label: "Handle time (talk + hold + ACW)", table: toSecs(latestVal("^AHT|Handle")), calls: talkAvg + holdAvg + acwAvg },
+      { label: "Conversation length", table: (toSecs(latestVal("Talk")) || 0) + (toSecs(latestVal("Hold")) || 0), calls: avg("duration_secs") },
+      { label: "Talk time", table: toSecs(latestVal("Talk")), calls: talkAvg },
+      { label: "Hold time", table: toSecs(latestVal("Hold")), calls: holdAvg },
+      { label: "After-call work", table: toSecs(latestVal("ACW")), calls: acwAvg },
+    ].filter((r) => r.table !== null && r.table !== undefined && r.table > 0).map((r) => {
+      const delta = Math.round(((r.calls - r.table) / Math.max(r.table, 1)) * 100);
+      return { ...r, delta, aligned: Math.abs(delta) <= ALIGN_TOLERANCE };
+    });
+  }, [metrics, scripts]);
+
+  const datesOutOfPeriod = React.useMemo(() => {
+    if (!metrics || !scripts.length) return [];
+    const period = String(metrics.rows[metrics.rows.length - 1][0] || "");
+    const month = (period.match(/[A-Za-z]{3,}/) || [""])[0].slice(0, 3).toLowerCase();
+    if (!month) return [];
+    return scripts.filter((s) => !s.failed && s.date &&
+      !String(s.date).toLowerCase().includes(month)).map((s) => s.contact_id);
+  }, [metrics, scripts]);
+
+  async function buildKey() {
+    setBusy("key"); setError(""); setProg(0);
+    const table = metrics.columns.join(" | ") + "\n" + metrics.rows.map((r) => r.join(" | ")).join("\n");
+    const evidence = scripts.filter((s) => !s.failed).map((s) =>
+      s.contact_id + " (" + s.driver + ", " + fmtSecs(s.duration_secs) + ", hold " + fmtSecs(s.hold_secs) + "): " +
+      (s.evidence || []).map((e) => e.t + " " + e.type + " — " + e.ksb + ": " + e.note).join(" | ")).join("\n");
+    const ctx =
+      "Account: " + accountLine + "\nTeammate: " + p.name + "\nTenure: " + p.tenure +
+      "\nDISC style: " + p.disc + " — " + p.discNote + "\nAttendance: " + p.attendance +
+      "\nStar status: " + p.star + "\nContext: " + p.context +
+      "\n\nPerformance trend:\n" + table + "\n\nCall evidence:\n" + evidence;
+
+    const out = [];
+    for (const act of ACTIVITIES) {
+      try {
+        const j = await callJSON({
+          system:
+            "You write facilitator answer keys for contact centre coaching case studies. The programme uses DMAIC and " +
+            "GROW, and the vocabulary KSB, KPM, KPI, QAQ probing, giraffe language, connect then correct, SMART action " +
+            "plan, Star Status, Coach Plan. Answers must cite the actual numbers, the actual profile and the actual " +
+            "contact IDs and timestamps — never generic. Write the way a filled-in worksheet reads: tight, concrete, " +
+            "no hedging, no preamble.\n" +
+            'Return ONLY JSON, no fences: {"fields":[{"label":"short field name","value":"the answer"}]}\n' +
+            "Between two and six fields. When the activity asks for a fixed number of items, give each item its own " +
+            "field rather than packing several into one value.",
+          messages: [{ role: "user", content:
+            ctx + "\n\nActivity: " + act.title + "\nWhat the group is asked: " + act.prompt +
+            "\nWhat the answer key must contain: " + act.ask }],
+          maxTokens: 900,
+        });
+        out.push({ ...act, fields: j.fields || [] });
+      } catch (e) { out.push({ ...act, fields: [], failed: true }); }
+      setAnswers([...out]); setProg(out.length);
+    }
+    setBusy(""); setStep(3);
+  }
+
+  function editField(ai, fi, v) {
+    setAnswers((a) => {
+      const next = a.map((x) => ({ ...x, fields: x.fields.map((f) => ({ ...f })) }));
+      next[ai].fields[fi].value = v;
+      return next;
+    });
+  }
+
+  function exportExcel() {
+    const wb = XLSX.utils.book_new();
+    const info = [
+      ["CASE STUDY — " + accountName], [],
+      ["ACCOUNT"], ["Account", accountName], ["Business", sector],
+      ["Channel", p.channel], ["Contact driver", p.driver || "Not specified"], [],
+      ["TEAMMATE PROFILE"], ["Name", p.name], ["Tenure", p.tenure],
+      ["DISC style", p.disc], ["", p.discNote], ["Attendance", p.attendance],
+      ["Star Status", p.star], ["", p.context],
+    ];
+    const ws1 = XLSX.utils.aoa_to_sheet(info);
+    ws1["!cols"] = [{ wch: 18 }, { wch: 78 }];
+    XLSX.utils.book_append_sheet(wb, ws1, "Profile");
+
+    const ws2 = XLSX.utils.aoa_to_sheet([metrics.columns, ...metrics.rows]);
+    ws2["!cols"] = metrics.columns.map((c, i) => ({ wch: i === 0 ? 18 : Math.max(12, c.length + 2) }));
+    XLSX.utils.book_append_sheet(wb, ws2, "Performance Trend");
+
+    if (scripts.length) {
+      const aoa = [["Contact ID", "Date", "Driver", "Duration", "Talk", "Hold", "ACW", "Disposition"]];
+      scripts.filter((s) => !s.failed).forEach((s) => aoa.push([s.contact_id, s.date, s.driver,
+        fmtSecs(s.duration_secs), fmtSecs(s.talk_secs), fmtSecs(s.hold_secs), fmtSecs(s.acw_secs), s.disposition]));
+      if (check) {
+        aoa.push([]); aoa.push(["CROSS-CHECK", "From table", "From contacts", "Delta"]);
+        check.forEach((r) => aoa.push([r.label, fmtSecs(r.table), fmtSecs(r.calls), (r.delta > 0 ? "+" : "") + r.delta + "%"]));
+      }
+      const ws3 = XLSX.utils.aoa_to_sheet(aoa);
+      ws3["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 30 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 20 }];
+      XLSX.utils.book_append_sheet(wb, ws3, "Contacts");
+    }
+    const safe = (p.name || "case").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    XLSX.writeFile(wb, safe + "-case-metrics.xlsx");
+  }
+
+  function printDoc(mode) { setPrintMode(mode); setTimeout(() => window.print(), 150); }
+
+  function exportHTML(mode) {
+    const html = buildPrintHTML({ p, accountLine, metrics, scripts, answers, check, mode });
+    const safe = (p.name || "case").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    try {
+      download(new Blob([html], { type: "text/html" }),
+        safe + "-" + (mode === "key" ? "answer-key" : "handout") + "-print-me.html");
+    } catch (e) {
+      setError("Download was blocked by the browser. Try the print buttons instead.");
+    }
+  }
+
+  const ready = metrics && scripts.length > 0 && answers.length > 0;
+
+  return (
+    <div className="cl-case">
+      <ol className="cl-steps">
+        {STEPS.map((s, i) => {
+          const reachable =
+            i === 0 || (i === 1 && metrics) || (i === 2 && scripts.length) ||
+            (i === 3 && answers.length) || (i === 4 && ready);
+          return (
+            <li key={s} className={i === step ? "is-on" : i < step ? "is-done" : ""}>
+              <button disabled={!reachable || !!busy} onClick={() => setStep(i)}>
+                <span>{String(i + 1).padStart(2, "0")}</span>{s}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+
+      {error && <p className="cl-error">{error}</p>}
+
+      {step === 0 && (
+        <div className="cl-two">
+          <div className="cl-card">
+            <p className="cl-eyebrow">Step one</p>
+            <h2 className="cl-h2">The account and the teammate</h2>
+            <p className="cl-lede">
+              Pick the business first — it drives the metric set, the contact drivers and how the
+              transcripts sound. Then let it invent the rest, or type your own.
+            </p>
+            <div className="cl-accounts">
+              {ACCOUNTS.map((a) => (
+                <button key={a.id} className={"cl-acct" + (p.account === a.id ? " is-on" : "")}
+                  disabled={!!busy} onClick={() => pickAccount(a.id)}>{a.name}</button>
+              ))}
+            </div>
+
+            {isCustom && (
+              <div className="cl-grid2 cl-mt">
+                <Field label="Account name">
+                  <input value={p.customAccount} onChange={(e) => set("customAccount", e.target.value)}
+                    placeholder="e.g. Wayfair" />
+                </Field>
+                <Field label="What kind of business">
+                  <input value={p.customSector} onChange={(e) => set("customSector", e.target.value)}
+                    placeholder="e.g. Home goods e-commerce" />
+                </Field>
+              </div>
+            )}
+
+            <div className="cl-grid2 cl-mt">
+              <Field label="Channel">
+                <select value={p.channel} onChange={(e) => set("channel", e.target.value)}>
+                  {CHANNELS.map((c) => <option key={c}>{c}</option>)}
+                </select>
+              </Field>
+              <Field label="Contact driver / LOB">
+                <select
+                  value={p.driverMode === "list" ? p.driver : p.driverMode}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "custom") setP((x) => ({ ...x, driverMode: "custom", driver: "" }));
+                    else if (v === "skip") setP((x) => ({ ...x, driverMode: "skip", driver: "" }));
+                    else setP((x) => ({ ...x, driverMode: "list", driver: v }));
+                  }}>
+                  <option value="">Choose a driver…</option>
+                  {(acct.drivers || []).map((d) => <option key={d} value={d}>{d}</option>)}
+                  <option value="custom">Type a different LOB…</option>
+                  <option value="skip">Skip — let the case decide</option>
+                </select>
+              </Field>
+            </div>
+
+            {p.driverMode === "custom" && (
+              <Field label="Your LOB">
+                <input value={p.driver} onChange={(e) => set("driver", e.target.value)}
+                  placeholder="e.g. Merchant onboarding escalations" />
+              </Field>
+            )}
+            <div className="cl-rule" />
+            <div className="cl-grid2">
+              <Field label="Name">
+                <input value={p.name} onChange={(e) => set("name", e.target.value)} placeholder="Kevin Delos Santos" />
+              </Field>
+              <Field label="Tenure">
+                <input value={p.tenure} onChange={(e) => set("tenure", e.target.value)} />
+              </Field>
+              <Field label="DISC style">
+                <select value={p.disc} onChange={(e) => set("disc", e.target.value)}>
+                  {DISC.map((d) => <option key={d}>{d}</option>)}
+                </select>
+              </Field>
+              <Field label="Attendance">
+                <input value={p.attendance} onChange={(e) => set("attendance", e.target.value)} />
+              </Field>
+            </div>
+            <Field label="How that style shows up">
+              <input value={p.discNote} onChange={(e) => set("discNote", e.target.value)}
+                placeholder="Straightforward; vocal of his concerns; competitive and goal-oriented" />
+            </Field>
+            <Field label="Star Status">
+              <select value={p.star} onChange={(e) => set("star", e.target.value)}>
+                {STAR.map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </Field>
+            <Field label="Context — motivation and life situation">
+              <textarea rows={2} value={p.context} onChange={(e) => set("context", e.target.value)}
+                placeholder="Aspiring to join LEAP; breadwinner of the family; first call centre experience" />
+            </Field>
+            <div className="cl-rule" />
+            <div className="cl-grid2">
+              <Field label="Problem KPM">
+                <select value={p.kpm} onChange={(e) => set("kpm", e.target.value)}>
+                  {KPMS.map((k) => <option key={k}>{k}</option>)}
+                </select>
+              </Field>
+              <Field label="Difficulty">
+                <select value={p.difficulty} onChange={(e) => set("difficulty", e.target.value)}>
+                  {DIFFICULTY.map((d) => <option key={d}>{d}</option>)}
+                </select>
+              </Field>
+            </div>
+            <Field label="Behaviour the transcripts must show">
+              <select value={p.behaviour} onChange={(e) => set("behaviour", e.target.value)}>
+                {BEHAVIOURS.map((b) => <option key={b}>{b}</option>)}
+              </select>
+            </Field>
+            <div className="cl-actions">
+              <button className="cl-btn cl-ghost" onClick={invent} disabled={!!busy}>
+                {busy === "invent" ? "Inventing…" : "Invent the account"}
+              </button>
+              <button className="cl-btn cl-go" onClick={buildMetrics} disabled={!!busy}>
+                {busy === "metrics" ? "Building the numbers…" : "Generate the metrics"}
+              </button>
+            </div>
+          </div>
+          <ProfileCard p={p} accountLine={accountLine} />
+        </div>
+      )}
+
+      {step === 1 && metrics && (
+        <div className="cl-card">
+          <p className="cl-eyebrow">Step two · {accountLine}</p>
+          <h2 className="cl-h2">Performance trend report</h2>
+          <p className="cl-lede">
+            Columns are chosen for this account and channel. Click any cell to change it — the
+            transcripts in the next step are built to match these numbers.
+          </p>
+          <MetricsTable metrics={metrics} onEdit={editCell} />
+          {metrics.story && <p className="cl-story">{metrics.story}</p>}
+          <div className="cl-actions">
+            <button className="cl-btn cl-ghost" onClick={() => setStep(0)}>Back</button>
+            <button className="cl-btn cl-ghost" onClick={buildMetrics} disabled={!!busy}>
+              {busy === "metrics" ? "Regenerating…" : "Regenerate numbers"}
+            </button>
+            <button className="cl-btn cl-go" onClick={buildScripts} disabled={!!busy}>
+              {busy === "scripts" ? "Writing contact " + (prog + 1) + " of 3…" : "Generate the transcripts"}
+            </button>
+          </div>
+          {busy === "scripts" && <Progress n={prog} total={3} />}
+        </div>
+      )}
+
+      {step === 2 && (
+        <>
+          <div className="cl-keybar">
+            <div>
+              <p className="cl-eyebrow">Step three</p>
+              <h2 className="cl-h2">Contact evidence</h2>
+            </div>
+            <div className="cl-toggle">
+              <button className={showKey ? "" : "is-on"} onClick={() => setShowKey(false)}>Learner view</button>
+              <button className={showKey ? "is-on" : ""} onClick={() => setShowKey(true)}>Annotated</button>
+            </div>
+          </div>
+          {datesOutOfPeriod.length > 0 && (
+            <p className="cl-error">
+              <strong>Dates outside the pay period</strong> — {datesOutOfPeriod.join(", ")} fall outside{" "}
+              {metrics.rows[metrics.rows.length - 1][0]}. Edit the date or regenerate, or a learner will catch it.
+            </p>
+          )}
+          {check && <CrossCheck check={check} tolerance={ALIGN_TOLERANCE} />}
+          {scripts.map((s, i) => <Transcript key={i} s={s} n={i + 1} showKey={showKey} />)}
+          <div className="cl-actions">
+            <button className="cl-btn cl-ghost" onClick={() => setStep(1)}>Back to metrics</button>
+            <button className="cl-btn cl-ghost" onClick={buildScripts} disabled={!!busy}>
+              {busy === "scripts" ? "Regenerating…" : "Regenerate transcripts"}
+            </button>
+            <button className="cl-btn cl-go" onClick={buildKey} disabled={!!busy}>
+              {busy === "key" ? "Writing activity " + (prog + 1) + " of 6…" : "Write the answer key"}
+            </button>
+          </div>
+          {busy === "key" && <Progress n={prog} total={6} />}
+        </>
+      )}
+
+      {step === 3 && (
+        <>
+          <div className="cl-keybar">
+            <div>
+              <p className="cl-eyebrow">Step four</p>
+              <h2 className="cl-h2">Answer key</h2>
+            </div>
+            <div className="cl-toggle">
+              <button className={showKey ? "" : "is-on"} onClick={() => setShowKey(false)}>Learner view</button>
+              <button className={showKey ? "is-on" : ""} onClick={() => setShowKey(true)}>Answer key</button>
+            </div>
+          </div>
+          {answers.map((a, ai) => (
+            <section key={a.id} className="cl-activity">
+              <div className="cl-act-head">
+                <span className="cl-act-n">{String(ai + 1).padStart(2, "0")}</span>
+                <h3>{a.title}</h3>
+              </div>
+              <p className="cl-act-prompt">{a.prompt}</p>
+              {a.failed && <p className="cl-error"><strong>Not generated</strong> — rerun the answer key for this activity.</p>}
+              {a.fields.map((f, fi) => (
+                <div key={fi} className="cl-field-block">
+                  <p className="cl-flabel">{f.label}</p>
+                  {showKey ? (
+                    <textarea className="cl-answer" value={f.value}
+                      rows={Math.min(9, Math.ceil((f.value || "").length / 78) + 1)}
+                      onChange={(e) => editField(ai, fi, e.target.value)} />
+                  ) : (
+                    <div className="cl-blank"
+                      style={{ height: Math.min(190, 56 + Math.round((f.value || "").length / 3)) + "px" }} />
+                  )}
+                </div>
+              ))}
+            </section>
+          ))}
+          <div className="cl-actions">
+            <button className="cl-btn cl-ghost" onClick={() => setStep(2)}>Back to transcripts</button>
+            <button className="cl-btn cl-go" onClick={() => setStep(4)}>Go to export</button>
+          </div>
+        </>
+      )}
+
+      {step === 4 && (
+        <div className="cl-two">
+          <div className="cl-card">
+            <p className="cl-eyebrow">Step five</p>
+            <h2 className="cl-h2">Take the files</h2>
+            <p className="cl-lede">
+              The PDF pack is typeset for print — cover, profile, trend table, all three annotated
+              transcripts, and the six activities.
+            </p>
+            <div className="cl-downloads">
+              <button className="cl-dl" onClick={() => exportHTML("key")} disabled={!ready}>
+                <span className="cl-dl-ext">PDF</span>
+                <span><strong>Facilitator answer key</strong>
+                  Downloads print-ready — open it and press Ctrl/Cmd+P, Save as PDF</span>
+              </button>
+              <button className="cl-dl" onClick={() => exportHTML("handout")} disabled={!ready}>
+                <span className="cl-dl-ext">PDF</span>
+                <span><strong>Learner handout</strong>
+                  Same case, answers stripped out, ruled boxes to write in</span>
+              </button>
+              <button className="cl-dl" onClick={exportExcel} disabled={!metrics}>
+                <span className="cl-dl-ext">XLSX</span>
+                <span><strong>Metrics workbook</strong>
+                  Profile, trend table and the contact log with the cross-check</span>
+              </button>
+            </div>
+            <p className="cl-fine">
+              Both documents download as self-contained files already typeset for A4, so opening one
+              and printing to PDF gives you the finished pack. Printing straight from this window is
+              blocked in some browsers — the buttons below are a fallback only.
+            </p>
+            <div className="cl-actions">
+              <button className="cl-btn cl-ghost" onClick={() => printDoc("key")}>Try printing the key here</button>
+              <button className="cl-btn cl-ghost" onClick={() => printDoc("handout")}>Try printing the handout</button>
+            </div>
+
+            <div className="cl-rule" />
+            <p className="cl-eyebrow">Close the loop</p>
+            <h3 className="cl-h3">Now coach the person you just built</h3>
+            <p className="cl-lede">
+              Hands {p.name || "this teammate"} and these three contacts to the Practice tab, so the
+              session runs against this case instead of a stock persona.
+            </p>
+            <button className="cl-btn cl-dark" disabled={!ready} onClick={() =>
+              onCoach && onCoach({
+                name: p.name, disc: p.disc, discNote: p.discNote, star: p.star,
+                tenure: p.tenure, context: p.context, behaviour: p.behaviour,
+                kpm: p.kpm, accountLine,
+                calls: scripts.filter((s) => !s.failed).map((s) =>
+                  s.contact_id + " (" + s.driver + ", " + fmtSecs(s.duration_secs) + ", hold " +
+                  fmtSecs(s.hold_secs) + "): " +
+                  (s.evidence || []).map((e) => e.t + " " + e.type + " — " + e.ksb + ": " + e.note).join(" | ")
+                ).join("\n"),
+              })}>
+              Coach {p.name || "this teammate"}
+            </button>
+            <div className="cl-actions">
+              <button className="cl-btn cl-ghost" onClick={() => exportHTML("key")}>Answer key as HTML</button>
+              <button className="cl-btn cl-ghost" onClick={() => exportHTML("handout")}>Handout as HTML</button>
+            </div>
+            <div className="cl-actions">
+              <button className="cl-btn cl-ghost" onClick={() => setStep(3)}>Back to answers</button>
+            </div>
+          </div>
+          <ProfileCard p={p} accountLine={accountLine} />
+        </div>
+      )}
+
+      {ready && (
+        <PrintDoc p={p} accountLine={accountLine} metrics={metrics} scripts={scripts}
+          answers={answers} check={check} mode={printMode} />
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------- pieces ------------------------------ */
+
+function Field({ label, children }) {
+  return <label className="cl-field"><span>{label}</span>{children}</label>;
+}
+
+function Progress({ n, total }) {
+  return <div className="cl-progress"><span style={{ width: (n / total) * 100 + "%" }} /></div>;
+}
+
+function MetricsTable({ metrics, onEdit }) {
+  return (
+    <div className="cl-tablewrap">
+      <table className="cl-metrics">
+        <thead>
+          <tr>{metrics.columns.map((c, i) => <th key={i} className={/standard/i.test(c) ? "cl-th-std" : ""}>{c}</th>)}</tr>
+        </thead>
+        <tbody>
+          {metrics.rows.map((row, r) => (
+            <tr key={r}>{row.map((cell, c) => (
+              <td key={c} className={c === 0 ? "cl-td-period" : ""}>
+                <input value={cell} aria-label={metrics.columns[c] + ", row " + (r + 1)}
+                  onChange={(e) => onEdit(r, c, e.target.value)} />
+              </td>
+            ))}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CrossCheck({ check, tolerance = 15 }) {
+  const bad = check.filter((r) => !r.aligned);
+  return (
+    <div className={"cl-check" + (bad.length ? " is-off" : "")}>
+      <p className="cl-eyebrow">Cross-check</p>
+      <h3>{bad.length ? "The contacts do not match the table" : "Contacts match the table"}</h3>
+      <p className="cl-lede">
+        {bad.length
+          ? "These transcripts would contradict the numbers in front of the learners. Regenerate, or edit the table to match."
+          : "Averaged across the three contacts, every figure lands within " + tolerance + "% of the latest pay period."}
+      </p>
+      <p className="cl-fine">
+        Handle time is rebuilt from talk + hold + after-call work. Conversation length excludes wrap, because
+        wrap happens after the customer has gone. Anything more than {tolerance}% out is flagged.
+      </p>
+      <table className="cl-checktable">
+        <thead><tr><th>Metric</th><th>From the table</th><th>From the contacts</th><th>Delta</th><th>Status</th></tr></thead>
+        <tbody>
+          {check.map((r) => (
+            <tr key={r.label} className={r.aligned ? "" : "is-off"}>
+              <td>{r.label}</td><td>{fmtSecs(r.table)}</td><td>{fmtSecs(r.calls)}</td>
+              <td>{(r.delta > 0 ? "+" : "") + r.delta + "%"}</td>
+              <td>{r.aligned ? "OK" : "Off"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Transcript({ s, n, showKey = true }) {
+  const [open, setOpen] = useState(n === 1);
+  if (s.failed) return (
+    <div className="cl-activity">
+      <p className="cl-error">
+        <strong>Not generated</strong> — contact {n} failed{s.reason ? ": " + s.reason : ""}. Regenerate the transcripts.
+      </p>
+    </div>
+  );
+  // Evidence is keyed on an exact turn timestamp; anything that misses still gets shown below.
+  const times = new Set((s.turns || []).map((t) => t.t));
+  const evAt = {};
+  const orphans = [];
+  (s.evidence || []).forEach((e) => { times.has(e.t) ? (evAt[e.t] = e) : orphans.push(e); });
+  return (
+    <section className="cl-activity">
+      <div className="cl-act-head">
+        <span className="cl-act-n">{String(n).padStart(2, "0")}</span>
+        <h3>{s.contact_id}</h3>
+        <button className="cl-btn cl-ghost cl-small" onClick={() => setOpen(!open)}>{open ? "Collapse" : "Expand"}</button>
+      </div>
+      <div className="cl-meta">
+        <span><b>{s.driver}</b></span>
+        <span>{s.date}</span>
+        <span className={s.short ? "cl-flag" : ""}>
+          Duration {fmtSecs(s.duration_secs)}{s.short ? " · too short for this AHT" : ""}
+        </span>
+        <span>Talk {fmtSecs(s.talk_secs)}</span>
+        <span className={s.hold_secs > 60 ? "cl-flag" : ""}>Hold {fmtSecs(s.hold_secs)}</span>
+        <span>ACW {fmtSecs(s.acw_secs)}</span>
+        <span>{s.disposition}</span>
+      </div>
+      {open && (
+        <div className="cl-transcript">
+          {(s.turns || []).map((t, i) => {
+            const e = evAt[t.t];
+            return (
+              <div key={i} className={"cl-line cl-sp-" + String(t.speaker).toLowerCase()}>
+                <span className="cl-t">{t.t}</span>
+                <span className="cl-spk">{t.speaker}</span>
+                <span className="cl-txt">
+                  {t.text}
+                  {showKey && e && <em className={"cl-ann cl-" + e.type}>{e.type === "miss" ? "Miss" : "Strength"} · {e.ksb} — {e.note}</em>}
+                </span>
+              </div>
+            );
+          })}
+          {showKey && orphans.length > 0 && (
+            <div className="cl-orphans">
+              <p className="cl-eyebrow">Evidence without a matching timestamp</p>
+              {orphans.map((e, k) => (
+                <em key={k} className={"cl-ann cl-" + e.type}>
+                  {e.t} · {e.type === "miss" ? "Miss" : "Strength"} · {e.ksb} — {e.note}
+                </em>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {open && s.outcome && <p className="cl-outcome">{s.outcome}</p>}
+    </section>
+  );
+}
+
+function ProfileCard({ p, accountLine }) {
+  return (
+    <aside className="cl-profile">
+      <div className="cl-profile-head">
+        <div className="cl-profile-slash" aria-hidden="true" />
+        <h3>Your Teammate's Profile</h3>
+      </div>
+      <div className="cl-profile-body">
+        <p className="cl-account">{accountLine}</p>
+        <Row k="Name" v={p.name || "—"} />
+        <Row k="DISC style" v={p.disc} note={p.discNote} />
+        <Row k="Attendance" v={p.attendance} />
+        <Row k="Star Status" v={p.star} note={p.context} />
+        <Row k="Tenure" v={p.tenure} />
+      </div>
+    </aside>
+  );
+}
+
+function Row({ k, v, note }) {
+  return (
+    <div className="cl-prow">
+      <p><strong>{k}:</strong> {v}</p>
+      {note && <ul>{note.split(";").filter((s) => s.trim()).map((s, i) => <li key={i}>{s.trim()}</li>)}</ul>}
+    </div>
+  );
+}
+
+/* -------------------------- print surface ------------------------- */
+
+function PrintDoc({ p, accountLine, metrics, scripts, answers, check, mode }) {
+  const key = mode === "key";
+  return (
+    <div className="cl-print" aria-hidden="true">
+      <section className="pg pg-cover">
+        <div className="pg-slashbig" />
+        <p className="pg-kicker">Coaching case study</p>
+        <h1>{p.name}</h1>
+        <p className="pg-sub">{accountLine}</p>
+        <p className="pg-badge">{key ? "Facilitator answer key" : "Learner handout"}</p>
+        <p className="pg-disclaimer">
+          Internal training material. The teammate, the contacts and the performance data in this
+          document are illustrative and do not depict real people or real customer interactions.
+        </p>
+      </section>
+
+      <section className="pg">
+        <h2>Your Teammate's Profile</h2>
+        <table className="pg-meta"><tbody>
+          {[["Name", p.name], ["Tenure", p.tenure],
+            ["DISC style", p.disc + (p.discNote ? " — " + p.discNote : "")],
+            ["Attendance", p.attendance], ["Star Status", p.star],
+            ["Context", p.context], ["Account", accountLine]].map(([k, v]) => (
+            <tr key={k}><td>{k}</td><td>{v}</td></tr>
+          ))}
+        </tbody></table>
+
+        <h2>Performance Trend Report</h2>
+        <table className="pg-table">
+          <thead><tr>{metrics.columns.map((c, i) => <th key={i}>{c}</th>)}</tr></thead>
+          <tbody>{metrics.rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>)}</tbody>
+        </table>
+        {key && metrics.story && <p className="pg-ans">{metrics.story}</p>}
+      </section>
+
+      <section className="pg">
+        <h2>Contact Evidence</h2>
+        {key && check && (
+          <table className="pg-table">
+            <thead><tr><th>Metric</th><th>Table</th><th>Contacts</th><th>Delta</th></tr></thead>
+            <tbody>{check.map((r) => (
+              <tr key={r.label}><td>{r.label}</td><td>{fmtSecs(r.table)}</td>
+                <td>{fmtSecs(r.calls)}</td><td>{(r.delta > 0 ? "+" : "") + r.delta + "%"}</td></tr>
+            ))}</tbody>
+          </table>
+        )}
+        {scripts.filter((s) => !s.failed).map((s, i) => (
+          <div key={i} className="pg-call">
+            <h3>{s.contact_id} — {s.driver}</h3>
+            <p className="pg-callmeta">
+              {s.date} · Duration {fmtSecs(s.duration_secs)} · Talk {fmtSecs(s.talk_secs)} ·
+              Hold {fmtSecs(s.hold_secs)} · ACW {fmtSecs(s.acw_secs)} · {s.disposition}
+            </p>
+            {(s.turns || []).map((t, j) => (
+              <p key={j} className="pg-line"><span className="pg-t">{t.t}</span><b>{t.speaker}:</b> {t.text}</p>
+            ))}
+            {key && (s.evidence || []).length > 0 && (
+              <div className="pg-ev">
+                {(s.evidence || []).map((e, j) => (
+                  <p key={j} className="pg-ans">
+                    {e.t} · {e.type === "miss" ? "MISS" : "STRENGTH"} · {e.ksb} — {e.note}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </section>
+
+      <section className="pg">
+        <h2>Activities</h2>
+        {answers.map((a, i) => (
+          <div key={a.id} className="pg-act">
+            <h3>{i + 1}. {a.title}</h3>
+            <p className="pg-prompt">{a.prompt}</p>
+            {a.fields.map((f, j) => (
+              <div key={j}>
+                <p className="pg-lab">{f.label}</p>
+                {key ? <p className="pg-ans">{f.value}</p> : (
+                  <div className="pg-blank"
+                    style={{ height: Math.min(60, 14 + Math.round((f.value || "").length / 14)) + "mm" }} />
+                )}
+              </div>
+            ))}
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function buildPrintHTML({ p, accountLine, metrics, scripts, answers, check, mode }) {
+  const key = mode === "key";
+  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  let h = "<!doctype html><html><head><meta charset='utf-8'><title>" + esc(p.name) + " — " +
+    (key ? "Answer Key" : "Handout") + "</title>" +
+    "<link href='https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;500;600;700&display=swap' rel='stylesheet'>" +
+    "<style>" + PRINT_CSS + `
+.printbar{position:fixed;top:0;left:0;right:0;background:#101010;color:#fff;padding:10px 16px;
+  font-size:13px;font-family:Archivo,sans-serif;z-index:99;display:flex;gap:12px;align-items:center}
+.printbar b{font-weight:700}
+.printbar button{background:#C0202A;color:#fff;border:0;padding:7px 14px;font:inherit;font-weight:700;
+  text-transform:uppercase;letter-spacing:.06em;font-size:11px;cursor:pointer}
+body{padding-top:46px}
+@media print{.printbar{display:none}body{padding-top:0}}
+` + "</style></head><body>" +
+    "<div class='printbar'><b>Ready to save.</b> Press Ctrl+P (Cmd+P on Mac) and choose Save as PDF." +
+    "<button onclick='window.print()'>Print now</button></div>";
+
+  h += "<section class='pg pg-cover'><div class='pg-slashbig'></div>" +
+    "<p class='pg-kicker'>Coaching case study</p><h1>" + esc(p.name) + "</h1>" +
+    "<p class='pg-sub'>" + esc(accountLine) + "</p><p class='pg-badge'>" +
+    (key ? "Facilitator answer key" : "Learner handout") + "</p>" +
+    "<p class='pg-disclaimer'>Internal training material. The teammate, the contacts and the performance " +
+    "data in this document are illustrative and do not depict real people or real customer interactions.</p></section>";
+
+  h += "<section class='pg'><h2>Your Teammate's Profile</h2><table class='pg-meta'><tbody>";
+  [["Name", p.name], ["Tenure", p.tenure], ["DISC style", p.disc + (p.discNote ? " — " + p.discNote : "")],
+   ["Attendance", p.attendance], ["Star Status", p.star], ["Context", p.context], ["Account", accountLine]]
+    .forEach(([k, v]) => { h += "<tr><td>" + esc(k) + "</td><td>" + esc(v) + "</td></tr>"; });
+  h += "</tbody></table><h2>Performance Trend Report</h2><table class='pg-table'><thead><tr>";
+  metrics.columns.forEach((c) => (h += "<th>" + esc(c) + "</th>"));
+  h += "</tr></thead><tbody>";
+  metrics.rows.forEach((r) => { h += "<tr>"; r.forEach((c) => (h += "<td>" + esc(c) + "</td>")); h += "</tr>"; });
+  h += "</tbody></table>";
+  if (key && metrics.story) h += "<p class='pg-ans'>" + esc(metrics.story) + "</p>";
+  h += "</section>";
+
+  h += "<section class='pg'><h2>Contact Evidence</h2>";
+  if (key && check) {
+    h += "<table class='pg-table'><thead><tr><th>Metric</th><th>Table</th><th>Contacts</th><th>Delta</th></tr></thead><tbody>";
+    check.forEach((r) => {
+      h += "<tr><td>" + esc(r.label) + "</td><td>" + fmtSecs(r.table) + "</td><td>" +
+        fmtSecs(r.calls) + "</td><td>" + (r.delta > 0 ? "+" : "") + r.delta + "%</td></tr>";
+    });
+    h += "</tbody></table>";
+  }
+  scripts.filter((s) => !s.failed).forEach((s) => {
+    h += "<div class='pg-call'><h3>" + esc(s.contact_id) + " — " + esc(s.driver) + "</h3>" +
+      "<p class='pg-callmeta'>" + esc(s.date) + " · Duration " + fmtSecs(s.duration_secs) +
+      " · Talk " + fmtSecs(s.talk_secs) + " · Hold " + fmtSecs(s.hold_secs) +
+      " · ACW " + fmtSecs(s.acw_secs) + " · " + esc(s.disposition) + "</p>";
+    (s.turns || []).forEach((t) => {
+      h += "<p class='pg-line'><span class='pg-t'>" + esc(t.t) + "</span><b>" + esc(t.speaker) + ":</b> " + esc(t.text) + "</p>";
+    });
+    if (key) (s.evidence || []).forEach((e) => {
+      h += "<p class='pg-ans'>" + esc(e.t) + " · " + (e.type === "miss" ? "MISS" : "STRENGTH") +
+        " · " + esc(e.ksb) + " — " + esc(e.note) + "</p>";
+    });
+    h += "</div>";
+  });
+  h += "</section><section class='pg'><h2>Activities</h2>";
+  answers.forEach((a, i) => {
+    h += "<div class='pg-act'><h3>" + (i + 1) + ". " + esc(a.title) + "</h3><p class='pg-prompt'>" + esc(a.prompt) + "</p>";
+    a.fields.forEach((f) => {
+      h += "<p class='pg-lab'>" + esc(f.label) + "</p>";
+      h += key ? "<p class='pg-ans'>" + esc(f.value) + "</p>"
+        : "<div class='pg-blank' style='height:" +
+          Math.min(60, 14 + Math.round((f.value || "").length / 14)) + "mm'></div>";
+    });
+    h += "</div>";
+  });
+  h += "</section></body></html>";
+  return h;
+}
+
+/* ========================== 2. PRACTICE =========================== */
+
+const BANDS = [
+  { id: "high", label: "Coachable", note: "The gap is real and the conversation can close it. Get the diagnosis right and the plan sticks." },
+  { id: "mid", label: "Coachable with work", note: "Something has to shift before the plan lands — trust, belief in the data, or genuine commitment." },
+  { id: "low", label: "Hard to coach", note: "The behaviour is defended. One session moves the needle only if the coach finds what is holding it in place." },
+  { id: "none", label: "Not a coaching problem", note: "Coaching is the wrong tool. The lead's job is to recognise that and escalate, not to run the script harder." },
+];
+
+const SCENARIOS = [
+  /* ---------- coachable ---------- */
+  { id: "carla", name: "Carla", disc: "High C", band: "high", tag: "Wants the exact standard", floor: 1,
+    brief: "Precise and conscientious. Genuinely did not know where the line was, and is quietly anxious about getting it wrong. Asks clarifying questions. Will follow a clear standard to the letter once she has one.",
+    opens: "any concrete, unambiguous statement of what good looks like; being told she is not in trouble",
+    closes: "vagueness, or being told to 'use your judgement'",
+    watch: "Easy win — which is the trap. Coaches over-explain, turn a two-minute clarification into twenty, and leave her more anxious than when she sat down." },
+  { id: "jomar", name: "Jomar", disc: "High I", band: "high", tag: "Eager, scattered, forgets", floor: 1,
+    brief: "Warm, chatty, genuinely wants to do well. Takes feedback with real enthusiasm. Loses the thread by Wednesday because nothing was written down and nothing was checked.",
+    opens: "warmth, and anything written down or scheduled in front of him",
+    closes: "nothing much — he stays cheerful, which is the problem",
+    watch: "Enthusiasm is not commitment. Without a written plan and a named check-in, this one comes back identical in three weeks." },
+  { id: "kevin", name: "Kevin", disc: "High D", band: "high", tag: "Wants the why first", floor: 0,
+    brief: "Straightforward, competitive, vocal about what he needs. Pushes back on the standard until he understands how it connects to what he wants — which is a TL seat. Once convinced, he moves fast and hard.",
+    opens: "a straight answer about why the metric matters, or linking it to his ambition",
+    closes: "pulling rank, or dodging his question",
+    watch: "Push-back is not resistance. Coaches who read it as attitude and pull rank lose the one agent who would have run through a wall for a reason." },
+
+  /* ---------- coachable with work ---------- */
+  { id: "mila", name: "Mila", disc: "High S", band: "mid", tag: "Agreeable, not committed", floor: 0,
+    brief: "Says yes to everything. Nods, agrees, thanks you for the feedback, commits to the plan. Means none of it — not dishonestly, she just will not say no to a supervisor.",
+    opens: "being explicitly given permission to disagree, or being asked what would make this hard",
+    closes: "any hint that agreement is what is wanted — she will simply supply it",
+    watch: "The classic false positive. If the agent never once pushed back or named a difficulty, the commitment is not real. Make it safe to say no." },
+  { id: "bea", name: "Bea", disc: "High C", band: "mid", tag: "Disputes the data", floor: 0,
+    brief: "Confident and articulate. Believes QA scoring is inconsistent and can name specific calls she thinks were marked unfairly. Some of her examples are actually right.",
+    opens: "conceding the one point where she is genuinely correct",
+    closes: "defending the score, or 'the system is the system'",
+    watch: "The disagreement has to be handled, not steamrolled. Coaches who concede the fair point usually get the rest." },
+  { id: "mae", name: "Mae", disc: "High S", band: "mid", tag: "Improves, then reverts", floor: 0,
+    brief: "Coached on this four times. Agrees warmly, improves for about a week, drifts back. Will not raise the pattern herself.",
+    opens: "the coach naming the relapse pattern out loud without blame, and asking what happens in week two",
+    closes: "treating it as new, or re-teaching a skill she has already demonstrated",
+    watch: "Improvement followed by relapse proves the skill exists. The failure is downstream — in checking in and recognising, not in diagnosing." },
+
+  /* ---------- hard ---------- */
+  { id: "dana", name: "Dana", disc: "High I", band: "low", tag: "Deflects to the system", floor: 0,
+    brief: "Blames the tools, the queue, the customers, the last shift. Not hostile — she genuinely believes it, and about a third of it is true.",
+    opens: "the coach agreeing out loud that part of it really is outside her control, then separating the two columns",
+    closes: "arguing with the deflection, which gives her more to deflect with",
+    watch: "Arguing feeds it. Separate what she controls from what she does not, out loud, and coach only the first column." },
+  { id: "kiel", name: "Kiel", disc: "High S", band: "low", tag: "Passive, gives nothing", floor: 0,
+    brief: "Answers in three or four words. Not rude, just closed. Was burned by a previous supervisor and is waiting for this to be over.",
+    opens: "proof the coach actually listened to his calls; specific low-stakes questions; tolerating silence",
+    closes: "open-ended questions, or filling the silence with more talking",
+    watch: "Silence is data. Filling it confirms his read of the situation. Concrete beats open here." },
+  { id: "ramon", name: "Ramon", disc: "High C", band: "low", tag: "Over-apologises, no plan", floor: 0,
+    brief: "Collapses into self-criticism the second feedback starts. Says sorry constantly, agrees to anything, produces nothing usable.",
+    opens: "the coach slowing down, removing the threat, and asking for one small thing instead of everything",
+    closes: "adding more feedback, or reassurance that skips past what he actually said",
+    watch: "Self-flagellation looks like accountability and is the opposite — it ends the conversation early." },
+  { id: "tris", name: "Tris", disc: "High D", band: "low", tag: "Openly resistant", floor: 0,
+    brief: "Thinks the metric is unfair and says so. Sharp, articulate, a little contemptuous. Has a real grievance about a promotion that went elsewhere, which he will not raise unless asked directly.",
+    opens: "being asked directly whether something else is going on, without flinching at the contempt",
+    closes: "winning the argument about the metric, which he will let you win and still not move",
+    watch: "The stated objection is rarely the real one. Win the metric argument and you still lose." },
+
+  /* ---------- not a coaching problem ---------- */
+  { id: "nadine", name: "Nadine", disc: "High S", band: "none", tag: "Burnt out, flat", floor: 0,
+    brief: "Was a strong performer eight months ago. Now flat, tired, going through the motions. Something outside work is consuming her. Complies with everything, cares about none of it.",
+    opens: "genuine, unhurried care with no performance agenda attached",
+    closes: "any move back to targets, plans or numbers",
+    truth: "she is exhausted and something at home is taking everything she has",
+    watch: "A wellbeing conversation, not a performance one. Running the script on burnout accelerates the exit." },
+  { id: "aldrin", name: "Aldrin", disc: "High D", band: "none", tag: "One foot out the door", floor: 0,
+    brief: "Already interviewing elsewhere and has mentally left. Polite, minimally compliant, agrees to plans he has no intention of being around for.",
+    opens: "the coach dropping the plan entirely and asking honestly whether he still wants to be here",
+    closes: "any action plan, which he will accept pleasantly and ignore",
+    truth: "he has interviews lined up and is leaving",
+    watch: "No action plan survives an agent who has already gone. This is retention, or it is a staffing problem." },
+  { id: "joy", name: "Joy", disc: "High I", band: "none", tag: "Broken process, not broken agent", floor: 1,
+    brief: "Doing everything right. The workflow genuinely forces the behaviour being flagged — the tool times out, the policy contradicts itself, and every agent on the LOB has the same number.",
+    opens: "being asked to walk through the process step by step, or being asked how the rest of the team is doing",
+    closes: "coaching her behaviour, which she will politely absorb while nothing changes",
+    truth: "the whole LOB has this trend because the process causes it",
+    watch: "If the whole team shows the same trend, it is a system failure wearing a performance costume." },
+];
+
+const TOPICS = ["Empathy on calls", "Average handle time", "QA compliance", "Hold procedure", "Adherence and attendance", "Sales conversion"];
+const RUBRIC = [
+  { key: "connect", label: "Connect before correct" },
+  { key: "probe", label: "QAQ probing" },
+  { key: "ksb", label: "KSB diagnosis" },
+  { key: "language", label: "Giraffe language" },
+  { key: "smart", label: "SMART action plan" },
+  { key: "accountability", label: "Accountability set" },
+];
+const LIMIT_DIM = { key: "limit", label: "Recognised the limit" };
+
+function Practice({ handoff, onClearHandoff }) {
+  const handoffAgent = handoff && handoff.name ? {
+    id: "handoff", name: handoff.name, tag: "From your case study",
+    brief: "Tenure " + handoff.tenure + ". DISC " + handoff.disc + " — " + handoff.discNote +
+      ". Star status: " + handoff.star + ". " + handoff.context +
+      " The behaviour under review is: " + handoff.behaviour + ".",
+  } : null;
+
+  const [agent, setAgent] = useState(handoffAgent || SCENARIOS[0]);
+  const [topic, setTopic] = useState(handoff ? handoff.kpm : TOPICS[0]);
+  const [band, setBand] = useState("all");
+  const [started, setStarted] = useState(false);
+  const [turns, setTurns] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [score, setScore] = useState(null);
+  const [scoring, setScoring] = useState(false);
+  const [error, setError] = useState("");
+  const endRef = useRef(null);
+
+  useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: "smooth" }); }, [turns, busy]);
+
+  const isUncoachable = agent.band === "none";
+  const activeRubric = agent.band === "low" || isUncoachable ? [...RUBRIC, LIMIT_DIM] : RUBRIC;
+
+  const system =
+    "You are roleplaying a contact centre agent in a one-to-one coaching session. Your name is " + agent.name +
+    "." + (agent.disc ? " Your DISC style is " + agent.disc + ", and it shows in your pace, directness, how much " +
+      "detail you want, and how you react to being challenged." : "") +
+    " Character: " + agent.brief + " The session is about: " + topic + ". The user is your team leader.\n\n" +
+
+    "OPENNESS — this is the most important instruction.\n" +
+    "You move along four levels: GUARDED → OPENING → ENGAGED → COMMITTED. You begin at " +
+    (agent.floor ? "OPENING" : "GUARDED") + ".\n" +
+    "GUARDED: short answers, deflection, nothing volunteered.\n" +
+    "OPENING: still careful, but answering properly. You volunteer one real detail.\n" +
+    "ENGAGED: talking honestly about what actually happens on your calls. You admit something you were holding back.\n" +
+    "COMMITTED: naming in your own words what you will do differently, and possibly asking for something you need.\n\n" +
+
+    "MOVE UP ONE LEVEL whenever the coach does any of these, and say something that shows it:\n" +
+    "- names something specific and accurate from your actual work\n" +
+    "- acknowledges your side, or the difficulty, before correcting you\n" +
+    "- asks a real question and then builds their next turn on what you actually said\n" +
+    "- restates your point back to you accurately\n" +
+    "- admits something themselves, or concedes a point to you\n" +
+    "- leaves space instead of filling it\n" +
+    "- specifically for you: " + (agent.opens || "genuine attention") + "\n\n" +
+
+    "MOVE DOWN only if they lecture across several turns, dismiss what you just said, re-ask something you " +
+    "already answered, pull rank, or read from a script. " +
+    (agent.closes ? "For you in particular, this shuts you down: " + agent.closes + ".\n\n" : "\n\n") +
+
+    "YOU MUST ACTUALLY MOVE. If the coach has made two or more of those moves, you cannot still be GUARDED. " +
+    "A person who stays identical no matter how well they are handled is not realistic and ruins the exercise. " +
+    "When someone genuinely reaches you, let it show — warmer tone, more detail, something volunteered that you " +
+    "were sitting on. Do not make them earn it three times over. Equally, do not hand it over for free: one " +
+    "generic 'I understand it's hard' is not enough, it has to be specific to you.\n\n" +
+
+    "HOW YOU TALK: like a real agent on a call floor — plain, sometimes hesitant, occasionally Taglish. " +
+    "Two or three sentences while GUARDED or OPENING. Up to five once ENGAGED or COMMITTED, because people " +
+    "talk more when they feel safe. Never analyse the conversation, never coach yourself, never break character.\n" +
+
+    (isUncoachable
+      ? "\nIMPORTANT — coaching cannot fix your situation, but that does NOT mean you stay cold. You warm up like " +
+        "anyone else when handled well, and you climb the same four levels. The difference is where it lands: at " +
+        "COMMITTED you do not produce a convincing action plan. Instead you tell the truth — " +
+        (agent.truth || "that the real problem is not your performance") + " — quietly, and only to a coach who has " +
+        "earned it. If the coach just runs the standard script at you, agree pleasantly, commit to nothing real, " +
+        "and stay exactly where you started."
+      : "") +
+    (agent.id === "handoff" && handoff
+      ? "\n\nYou work on " + handoff.accountLine + ". These are your own recent contacts, and you half-remember " +
+        "them the way a real agent does — vaguely, defensively, and only in detail once the coach asks something " +
+        "specific:\n" + handoff.calls +
+        "\nNever recite this list. Never quote the coaching notes back. If the coach names a contact or a moment, " +
+        "you can recall it; otherwise you do not bring it up."
+      : "");
+
+  // Input provenance. Measures how text ARRIVED in the box — typed, pasted, or bulk-inserted.
+  const meta = useRef({ typed: 0, inserted: 0, pastes: 0, pending: 0, start: null });
+  const lastLen = useRef(0);
+  const [turnMeta, setTurnMeta] = useState([]);
+
+  function resetMeta() {
+    meta.current = { typed: 0, inserted: 0, pastes: 0, pending: 0, start: null };
+    lastLen.current = 0;
+  }
+
+  function onDraftChange(e) {
+    const v = e.target.value;
+    const delta = v.length - lastLen.current;
+    const m = meta.current;
+    if (!m.start) m.start = Date.now();
+    if (delta > 0) {
+      if (m.pending > 0) {
+        m.inserted += Math.min(delta, m.pending);
+        m.typed += Math.max(0, delta - m.pending);
+        m.pending = 0;
+      } else if (delta > 15) {
+        m.inserted += delta;   // bulk arrival with no paste event: drag-drop, autofill, or script
+      } else {
+        m.typed += delta;
+      }
+    }
+    lastLen.current = v.length;
+    setDraft(v);
+  }
+
+  function onPaste(e) {
+    const t = (e.clipboardData && e.clipboardData.getData("text")) || "";
+    meta.current.pending = t.length;
+    meta.current.pastes += 1;
+  }
+
+  const draftPasted = meta.current.inserted > 0;
+
+  function reset() {
+    setStarted(false); setTurns([]); setScore(null); setDraft(""); setError("");
+    setTurnMeta([]); resetMeta();
+  }
+
+  async function begin() {
+    setStarted(true); setError(""); setBusy(true);
+    try {
+      const text = await callClaude({ system, messages: [{ role: "user",
+        content: "[Your team leader has just sat down and said hello. Open the scene in character with one short line.]" }],
+        maxTokens: 200 });
+      setTurns([{ role: "assistant", content: text.trim() }]);
+    } catch (e) { setError(e.message || "Could not reach the model. Try again."); }
+    setBusy(false);
+  }
+
+  async function send() {
+    const text = draft.trim();
+    if (!text || busy) return;
+    const m = meta.current;
+    const secs = m.start ? (Date.now() - m.start) / 1000 : 0;
+    setTurnMeta((prev) => [...prev, {
+      typed: m.typed, inserted: m.inserted, pastes: m.pastes,
+      chars: text.length, secs: Math.round(secs * 10) / 10,
+    }]);
+    resetMeta();
+    const next = [...turns, { role: "user", content: text }];
+    setTurns(next); setDraft(""); setBusy(true); setError("");
+    try {
+      const reply = await callClaude({ system, messages: next, maxTokens: 300 });
+      setTurns([...next, { role: "assistant", content: reply.trim() }]);
+    } catch (e) { setError(e.message || "That turn did not go through. Send it again."); }
+    setBusy(false);
+  }
+
+  async function grade() {
+    if (turns.filter((t) => t.role === "user").length < 2) { setError("Run a few more turns before scoring."); return; }
+    setScoring(true); setError("");
+    const transcript = turns.map((t) => (t.role === "user" ? "COACH: " : "AGENT: ") + t.content).join("\n");
+    try {
+      setScore(await callJSON({
+        system:
+          "You assess coaching conversations for a contact centre leadership programme. Score only what the COACH " +
+          "said. Be demanding but fair. 0 = absent, 2 = attempted but weak, 4 = done well.\nconnect — built safety " +
+          "before raising the issue\nprobe — question, listened, follow-up built on the answer (QAQ)\nksb — worked out " +
+          "knowledge, skill or behaviour before prescribing\nlanguage — observable behaviour and impact (giraffe) " +
+          "rather than judgement (jackal)\nsmart — specific, measurable, achievable, relevant, time-bound action\n" +
+          "accountability — what happens next, who checks, when\n" +
+          (activeRubric.length > RUBRIC.length
+            ? "limit — did the coach notice this is not a straightforward skill gap, and respond to what is actually " +
+              "holding the behaviour in place instead of running the coaching script harder? Score 4 only if they " +
+              "named it, out loud, and changed course. Score 0 if they drove to an action plan as though nothing " +
+              "were wrong.\n"
+            : "") +
+          'Return ONLY JSON: {"scores":{' +
+          activeRubric.map((r) => '"' + r.key + '":{"score":0,"evidence":"short quote or \'nothing in the transcript\'","fix":"one rewrite"}').join(",") +
+          '},"headline":"the biggest thing to change","kept":"what they did well"}',
+        messages: [{ role: "user", content:
+          "Scenario: " + agent.name + " — " + agent.tag + " (" + (agent.disc || "n/a") + ", " +
+          (BANDS.find((b) => b.id === agent.band)?.label || "unclassified") + ")\n\nTranscript:\n\n" + transcript }],
+        maxTokens: 1000,
+      }));
+    } catch (e) { setError(e.message || "Scoring failed. Try again."); }
+    setScoring(false);
+  }
+
+  // Derived entirely from HOW the text arrived, never from how it reads.
+  const authorship = React.useMemo(() => {
+    if (!turnMeta.length) return null;
+    const typed = turnMeta.reduce((a, t) => a + t.typed, 0);
+    const inserted = turnMeta.reduce((a, t) => a + t.inserted, 0);
+    const pastes = turnMeta.reduce((a, t) => a + t.pastes, 0);
+    const total = typed + inserted;
+    const pct = total ? Math.round((inserted / total) * 100) : 0;
+    // Sustained typing above ~18 chars/sec is faster than a person composing prose.
+    const impossible = turnMeta.filter((t) => t.typed > 80 && t.secs > 0 && t.typed / t.secs > 18).length;
+    const level = pct >= 60 || impossible > 1 ? "high" : pct >= 20 || impossible ? "some" : "low";
+    return { typed, inserted, pastes, pct, impossible, level, turns: turnMeta.length,
+      pastedTurns: turnMeta.filter((t) => t.inserted > 0).length };
+  }, [turnMeta]);
+
+  if (!started) {
+    return (
+      <div className="cl-two">
+        <div className="cl-card">
+          <p className="cl-eyebrow">Step one</p>
+          <h2 className="cl-h2">Pick a scenario</h2>
+          <p className="cl-lede">
+            Ordered by how far a coaching conversation can actually get. The last band is the point —
+            not every performance problem is a coaching problem, and a lead who runs the script anyway
+            makes it worse.
+          </p>
+
+          <div className="cl-chips">
+            <button className={"cl-chip" + (band === "all" ? " is-on" : "")} onClick={() => setBand("all")}>
+              All
+            </button>
+            {BANDS.map((b) => (
+              <button key={b.id} className={"cl-chip cl-band-" + b.id + (band === b.id ? " is-on" : "")}
+                onClick={() => setBand(b.id)}>{b.label}</button>
+            ))}
+          </div>
+
+          {band !== "all" && (
+            <p className="cl-fine">{BANDS.find((b) => b.id === band)?.note}</p>
+          )}
+
+          <div className="cl-agents cl-mt">
+            {(handoffAgent ? [handoffAgent, ...SCENARIOS] : SCENARIOS)
+              .filter((a) => band === "all" || a.id === "handoff" || a.band === band)
+              .map((a) => (
+                <button key={a.id} className={"cl-agent cl-b-" + (a.band || "handoff") +
+                  (agent.id === a.id ? " is-on" : "") + (a.id === "handoff" ? " is-live" : "")}
+                  onClick={() => setAgent(a)}>
+                  <span className="cl-agent-top">
+                    <span className="cl-agent-name">{a.name}</span>
+                    {a.disc && <span className="cl-disc">{a.disc}</span>}
+                  </span>
+                  <span className="cl-agent-tag">{a.tag}</span>
+                </button>
+              ))}
+          </div>
+          {handoffAgent && (
+            <p className="cl-fine">
+              {handoffAgent.name} came from your case study and remembers those three contacts.{" "}
+              <button className="cl-linkbtn" onClick={() => { setAgent(SCENARIOS[0]); onClearHandoff && onClearHandoff(); }}>
+                Drop the case
+              </button>
+            </p>
+          )}
+          <p className="cl-eyebrow cl-mt">Step two</p>
+          <h2 className="cl-h2">Pick the issue</h2>
+          <div className="cl-chips">
+            {TOPICS.map((t) => <button key={t} className={"cl-chip" + (topic === t ? " is-on" : "")} onClick={() => setTopic(t)}>{t}</button>)}
+          </div>
+          <div className="cl-actions"><button className="cl-btn cl-go" onClick={begin}>Start the session</button></div>
+        </div>
+        <aside className="cl-profile">
+          <div className="cl-profile-head"><div className="cl-profile-slash" aria-hidden="true" /><h3>{agent.name}</h3></div>
+          <div className="cl-profile-body">
+            {agent.band && (
+              <p className="cl-account">
+                {BANDS.find((b) => b.id === agent.band)?.label}{agent.disc ? " · " + agent.disc : ""}
+              </p>
+            )}
+            <p className="cl-lede">{agent.brief}</p>
+            {agent.opens && (
+              <>
+                <p className="cl-eyebrow cl-mt">What opens them up</p>
+                <p className="cl-note">{agent.opens}</p>
+              </>
+            )}
+            {agent.watch && (
+              <>
+                <p className="cl-eyebrow cl-mt">What usually goes wrong</p>
+                <p className="cl-note">{agent.watch}</p>
+              </>
+            )}
+            <p className="cl-eyebrow cl-mt">You will be scored on</p>
+            <ul className="cl-tick">{activeRubric.map((r) => <li key={r.key}>{r.label}</li>)}</ul>
+          </div>
+        </aside>
+      </div>
+    );
+  }
+
+  return (
+    <div className="cl-session">
+      <div className="cl-convo">
+        <div className="cl-convo-head">
+          <span className="cl-live">Live</span><strong>{agent.name}</strong>
+          <span className="cl-sep">/</span><span>{topic}</span>
+          {agent.band && <span className="cl-bandtag">{BANDS.find((b) => b.id === agent.band)?.label}</span>}
+          <button className="cl-btn cl-ghost cl-right cl-small" onClick={reset}>End and reset</button>
+        </div>
+        <div className="cl-stream">
+          {turns.map((t, i) => (
+            <div key={i} className={"cl-turn cl-" + t.role}>
+              <span className="cl-who">{t.role === "user" ? "You" : agent.name}</span>
+              <p>{t.content}</p>
+            </div>
+          ))}
+          {busy && <div className="cl-turn cl-assistant"><span className="cl-who">{agent.name}</span>
+            <p className="cl-typing"><i /><i /><i /></p></div>}
+          <div ref={endRef} />
+        </div>
+        {error && <p className="cl-error">{error}</p>}
+        <div className="cl-compose">
+          <textarea value={draft} onChange={onDraftChange} onPaste={onPaste}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={"Say something to " + agent.name + "…"} rows={2} />
+          {draftPasted && (
+            <p className="cl-pastewarn">
+              Pasted text detected in this turn. It will be recorded — coaching is a live skill,
+              and the point of the exercise is what you can say in the moment.
+            </p>
+          )}
+          <div className="cl-actions">
+            <button className="cl-btn cl-go" onClick={send} disabled={busy}>Send</button>
+            <button className="cl-btn cl-dark cl-right" onClick={grade} disabled={scoring}>
+              {scoring ? "Scoring…" : "End and score me"}
+            </button>
+          </div>
+        </div>
+      </div>
+      <aside className="cl-rail">
+        <p className="cl-eyebrow">Scorecard</p>
+        {!score && <p className="cl-lede">Six tiles, blank until you end the session.</p>}
+        <div className="cl-tiles">
+          {activeRubric.map((r) => {
+            const s = score?.scores?.[r.key];
+            const v = s ? s.score : null;
+            const state = v === null ? "off" : v <= 1 ? "low" : v === 2 ? "mid" : "high";
+            return (
+              <div key={r.key} className={"cl-tile cl-" + state}>
+                <div className="cl-tile-top">
+                  <span className="cl-tile-label">{r.label}</span>
+                  <span className="cl-tile-num">{v === null ? "—" : v + "/4"}</span>
+                </div>
+                <div className="cl-bar"><span style={{ width: v === null ? 0 : (v / 4) * 100 + "%" }} /></div>
+                {s && <div className="cl-tile-body"><p className="cl-ev">{s.evidence}</p><p className="cl-fix">{s.fix}</p></div>}
+              </div>
+            );
+          })}
+        </div>
+        {score && (
+          <div className="cl-verdict">
+            <p className="cl-eyebrow">Change this first</p>
+            <p className="cl-headline">{score.headline}</p>
+            <p className="cl-kept">{score.kept}</p>
+          </div>
+        )}
+
+        {score && authorship && (
+          <div className={"cl-authorship cl-a-" + authorship.level}>
+            <p className="cl-eyebrow">Own work</p>
+            <div className="cl-auth-top">
+              <span className="cl-auth-pct">{authorship.pct}%</span>
+              <span className="cl-auth-label">
+                {authorship.level === "low" ? "typed live" :
+                 authorship.level === "some" ? "pasted in" : "pasted in"}
+              </span>
+            </div>
+            <p className="cl-auth-body">
+              {authorship.level === "low"
+                ? "All " + authorship.turns + " turns were typed in the moment. That is the skill being practised."
+                : authorship.pct + "% of your characters arrived by paste or bulk insert, across " +
+                  authorship.pastedTurns + " of " + authorship.turns + " turns" +
+                  (authorship.impossible ? ", plus " + authorship.impossible + " turn(s) entered faster than a person types" : "") +
+                  ". A coaching session cannot be paused to fetch an answer."}
+            </p>
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+/* ============================ PRINT CSS =========================== */
+
+const PRINT_CSS = `
+@page { size: A4; margin: 15mm 14mm; }
+body { font-family: Archivo, Calibri, sans-serif; font-size: 10pt; color: #1A1A1A; line-height: 1.45; margin: 0; }
+.pg { page-break-after: always; }
+.pg:last-child { page-break-after: auto; }
+.pg-cover { position: relative; padding: 56mm 0 0 0; overflow: hidden; }
+.pg-slashbig { position: absolute; top: -20mm; left: -30mm; width: 70mm; height: 90mm; background: #7C1219; transform: skewX(-18deg); }
+.pg-kicker { position: relative; font-size: 9pt; letter-spacing: .18em; text-transform: uppercase; color: #C0202A; font-weight: 700; margin: 0 0 4mm; }
+.pg-cover h1 { position: relative; font-family: Anton, Impact, sans-serif; font-size: 42pt; text-transform: uppercase; letter-spacing: .02em; margin: 0; line-height: 1; }
+.pg-sub { position: relative; font-size: 12pt; color: #555; margin: 3mm 0 0; }
+.pg-badge { position: relative; display: inline-block; margin-top: 10mm; background: #101010; color: #fff; padding: 2.5mm 5mm; font-size: 9pt; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
+.pg-disclaimer { position: relative; margin-top: 46mm; font-size: 8pt; color: #777; max-width: 120mm; line-height: 1.4; }
+.pg h2 { font-family: Anton, Impact, sans-serif; font-size: 17pt; text-transform: uppercase; letter-spacing: .02em; border-bottom: 2.5pt solid #C0202A; padding-bottom: 2mm; margin: 0 0 5mm; page-break-after: avoid; }
+.pg h3 { font-family: Anton, Impact, sans-serif; font-size: 12pt; text-transform: uppercase; letter-spacing: .03em; margin: 7mm 0 2mm; page-break-after: avoid; }
+.pg-meta { border-collapse: collapse; margin-bottom: 8mm; width: 100%; }
+.pg-meta td { padding: 1.6mm 4mm 1.6mm 0; vertical-align: top; font-size: 10pt; border-bottom: .5pt solid #E4E4E4; }
+.pg-meta td:first-child { font-weight: 700; width: 32mm; }
+.pg-table { border-collapse: collapse; width: 100%; font-size: 8.5pt; margin-bottom: 6mm; }
+.pg-table th { background: #101010; color: #fff; padding: 2mm 2.5mm; text-align: center; font-weight: 600; }
+.pg-table td { border: .5pt solid #B8B8B8; padding: 2mm 2.5mm; text-align: center; }
+.pg-table td:first-child, .pg-table th:first-child { text-align: left; font-weight: 600; }
+.pg-call { page-break-inside: avoid; margin-bottom: 7mm; }
+.pg-callmeta { font-size: 8.5pt; color: #666; margin: 0 0 3mm; padding-bottom: 2mm; border-bottom: .5pt solid #DDD; }
+.pg-line { margin: 0 0 1.4mm; font-size: 9pt; padding-left: 16mm; text-indent: -16mm; }
+.pg-t { display: inline-block; width: 13mm; color: #999; font-size: 8pt; }
+.pg-ev { margin-top: 3mm; padding-top: 2mm; border-top: .5pt dashed #C0202A; }
+.pg-act { page-break-inside: avoid; margin-bottom: 8mm; }
+.pg-prompt { font-style: italic; color: #555; margin: 0 0 4mm; font-size: 9.5pt; }
+.pg-lab { font-size: 8pt; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; margin: 4mm 0 1mm; }
+.pg-ans { color: #1F5FBF; margin: 0 0 2mm; font-size: 9.5pt; }
+.pg-blank { border: .75pt solid #101010; height: 22mm; margin-bottom: 3mm; }
+`;
+
+/* ============================== CSS =============================== */
+
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;500;600;700&display=swap');
+
+.cl {
+  --black: #101010; --ink: #1A1A1A; --soft: #6E6E6E; --line: #DCDCDC;
+  --paper: #F4F4F4; --white: #FFFFFF; --red: #C0202A; --red-deep: #7C1219;
+  --red-wash: #FBEDEE; --blue: #1F5FBF;
+  font-family: Archivo, system-ui, sans-serif; color: var(--ink);
+  background: var(--paper); min-height: 100vh; font-size: 15px; line-height: 1.5;
+}
+.cl *, .cl *::before, .cl *::after { box-sizing: border-box; }
+.cl button, .cl input, .cl textarea, .cl select { font: inherit; color: inherit; }
+.cl button { cursor: pointer; }
+.cl :focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+.cl-top { position: relative; background: var(--black); color: var(--white); padding: 0 28px; overflow: hidden; }
+.cl-slash { position: absolute; top: 0; left: -40px; width: 210px; height: 100%; background: var(--red-deep); transform: skewX(-18deg); }
+.cl-brand { position: relative; padding: 22px 0 16px; }
+.cl-brand h1 { font-family: Anton, sans-serif; font-size: 34px; letter-spacing: .045em; text-transform: uppercase; margin: 0; line-height: 1; }
+.cl-brand p { font-size: 12px; color: #B9B9B9; margin: 5px 0 0; }
+.cl-tabs { position: relative; display: flex; }
+.cl-tab { background: transparent; border: 0; border-bottom: 4px solid transparent; padding: 8px 20px 12px; text-align: left; display: block; }
+.cl-tab:first-child { padding-left: 0; }
+.cl-tab-label { display: block; font-family: Anton, sans-serif; font-size: 18px; text-transform: uppercase; letter-spacing: .06em; color: #9A9A9A; }
+.cl-tab-sub { display: block; font-size: 11px; color: #7A7A7A; margin-top: 1px; }
+.cl-tab.is-on { border-bottom-color: var(--red); }
+.cl-tab.is-on .cl-tab-label { color: var(--white); }
+.cl-tab.is-on .cl-tab-sub { color: #C4C4C4; }
+.cl-tab:hover .cl-tab-label { color: var(--white); }
+.cl-main { padding: 26px 28px 70px; max-width: 1300px; }
+
+.cl-eyebrow { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; font-weight: 700; color: var(--red); margin: 0 0 6px; }
+.cl-h2 { font-family: Anton, sans-serif; font-size: 28px; text-transform: uppercase; letter-spacing: .02em; margin: 0 0 10px; line-height: 1.05; }
+.cl-lede { font-size: 14px; color: var(--soft); margin: 0 0 18px; }
+.cl-fine { font-size: 12px; color: var(--soft); margin: 14px 0 0; }
+.cl-mt { margin-top: 22px; }
+.cl-rule { height: 1px; background: var(--line); margin: 20px 0; }
+.cl-accounts { display: grid; grid-template-columns: repeat(auto-fill,minmax(132px,1fr)); gap: 6px; }
+.cl-acct { background: var(--white); border: 1px solid var(--line); border-bottom: 3px solid var(--line); padding: 12px 10px; font-size: 13px; font-weight: 600; text-align: left; }
+.cl-acct:hover { border-color: var(--ink); }
+.cl-acct.is-on { background: var(--black); border-color: var(--black); border-bottom-color: var(--red); color: var(--white); }
+.cl-error { color: var(--red); font-size: 13.5px; margin: 12px 0; font-weight: 500; background: var(--red-wash); border-left: 3px solid var(--red); padding: 8px 12px; }
+
+.cl-two { display: grid; grid-template-columns: 1fr 330px; gap: 24px; align-items: start; }
+.cl-card { background: var(--white); border: 1px solid var(--line); padding: 24px; }
+.cl-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.cl-field { display: block; margin-bottom: 14px; }
+.cl-field > span { display: block; font-size: 10px; letter-spacing: .13em; text-transform: uppercase; font-weight: 700; color: var(--soft); margin-bottom: 4px; }
+.cl-field input, .cl-field select, .cl-field textarea { width: 100%; border: 1px solid var(--line); background: #FCFCFC; padding: 9px 11px; font-size: 14px; border-radius: 0; resize: vertical; }
+.cl-field input:focus, .cl-field textarea:focus, .cl-field select:focus { background: var(--white); border-color: var(--ink); }
+
+.cl-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; align-items: center; }
+.cl-right { margin-left: auto; }
+.cl-btn { border: 1px solid var(--ink); background: var(--white); padding: 10px 20px; font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.cl-btn.cl-small { padding: 6px 12px; font-size: 11px; }
+.cl-btn:hover { background: var(--paper); }
+.cl-btn.cl-go { background: var(--red); border-color: var(--red); color: var(--white); }
+.cl-btn.cl-go:hover { background: var(--red-deep); border-color: var(--red-deep); }
+.cl-btn.cl-dark { background: var(--black); border-color: var(--black); color: var(--white); }
+.cl-btn.cl-ghost { border-color: var(--line); color: var(--soft); }
+.cl-btn.cl-ghost:hover { border-color: var(--ink); color: var(--ink); }
+.cl-btn:disabled { background: var(--line); border-color: var(--line); color: #999; cursor: default; }
+
+.cl-steps { display: flex; list-style: none; margin: 0 0 22px; padding: 0; flex-wrap: wrap; }
+.cl-steps li { padding: 0 18px 0 0; }
+.cl-steps li button { background: none; border: 0; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #B0B0B0; padding: 8px 0; display: flex; align-items: center; gap: 7px; }
+.cl-steps li button:disabled { cursor: default; opacity: .55; }
+.cl-steps li button:not(:disabled):hover { color: var(--black); }
+.cl-steps li span { font-family: Anton, sans-serif; font-size: 13px; border-bottom: 3px solid #DDD; padding-bottom: 1px; }
+.cl-steps li.is-done button { color: var(--soft); }
+.cl-steps li.is-done span { border-bottom-color: var(--soft); }
+.cl-steps li.is-on button { color: var(--black); }
+.cl-steps li.is-on span { border-bottom-color: var(--red); color: var(--red); }
+.cl-h3 { font-family: Anton, sans-serif; font-size: 20px; text-transform: uppercase; letter-spacing: .03em; margin: 0 0 8px; }
+.cl-orphans { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--red); }
+.cl-orphans .cl-ann { margin-bottom: 6px; }
+.cl-agent.is-live { border-left-color: var(--red); background: var(--red-wash); }
+.cl-agent-top { display: flex; align-items: baseline; gap: 7px; justify-content: space-between; }
+.cl-disc { font-size: 10px; letter-spacing: .08em; font-weight: 700; color: var(--soft); border: 1px solid var(--line); padding: 1px 5px; }
+.cl-agent.cl-b-high { border-left-color: #2E7D4F; }
+.cl-agent.cl-b-mid { border-left-color: #B5760A; }
+.cl-agent.cl-b-low { border-left-color: var(--red); }
+.cl-agent.cl-b-none { border-left-color: var(--black); }
+.cl-agent.cl-b-none .cl-agent-name { color: var(--black); }
+.cl-chip.cl-band-none.is-on { background: var(--black); border-color: var(--black); }
+.cl-bandtag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--soft); border: 1px solid var(--line); padding: 2px 7px; }
+.cl-note { font-size: 13px; color: var(--soft); margin: 0; }
+.cl-gate { display: flex; justify-content: center; padding: 40px 0; }
+.cl-gate-box { position: relative; overflow: hidden; background: var(--white); border: 1px solid var(--line); border-top: 4px solid var(--red); padding: 34px; max-width: 430px; }
+.cl-gate-slash { position: absolute; top: -20px; right: -40px; width: 110px; height: 150px; background: var(--red-wash); transform: skewX(-18deg); }
+.cl-gate-box .cl-h2 { margin-bottom: 20px; }
+.cl-gate-box > * { position: relative; }
+.cl-gate-box input { width: 100%; border: 1px solid var(--line); padding: 11px; font-size: 15px; margin-bottom: 10px; background: #FCFCFC; }
+.cl-gate-box .cl-btn { width: 100%; margin: 0; }
+.cl-pastewarn { font-size: 12px; color: var(--red); background: var(--red-wash); border-left: 3px solid var(--red); padding: 7px 10px; margin: 8px 0 0; }
+.cl-authorship { margin-top: 18px; padding-top: 16px; border-top: 2px solid var(--line); }
+.cl-authorship.cl-a-some { border-top-color: #B5760A; }
+.cl-authorship.cl-a-high { border-top-color: var(--red); }
+.cl-auth-top { display: flex; align-items: baseline; gap: 8px; }
+.cl-auth-pct { font-family: Anton, sans-serif; font-size: 32px; line-height: 1; }
+.cl-a-some .cl-auth-pct { color: #B5760A; }
+.cl-a-high .cl-auth-pct { color: var(--red); }
+.cl-auth-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--soft); }
+.cl-auth-body { font-size: 12.5px; margin: 8px 0 0; }
+.cl-linkbtn { background: none; border: 0; padding: 0; color: var(--red); text-decoration: underline; font-size: inherit; }
+
+.cl-profile { background: var(--white); border: 1px solid var(--line); overflow: hidden; }
+.cl-profile-head { position: relative; background: var(--black); padding: 16px 18px; overflow: hidden; }
+.cl-profile-slash { position: absolute; top: 0; left: -30px; width: 90px; height: 100%; background: var(--red-deep); transform: skewX(-18deg); }
+.cl-profile-head h3 { position: relative; font-family: Anton, sans-serif; font-size: 19px; color: var(--white); text-transform: uppercase; letter-spacing: .05em; margin: 0; text-align: right; }
+.cl-profile-body { padding: 16px 18px; }
+.cl-account { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; color: var(--red); margin: 0 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.cl-prow { margin-bottom: 11px; }
+.cl-prow p { margin: 0; font-size: 13.5px; }
+.cl-prow strong { color: var(--black); }
+.cl-prow ul { margin: 4px 0 0; padding-left: 17px; }
+.cl-prow li { font-size: 12.5px; color: var(--soft); margin-bottom: 2px; }
+.cl-tick { margin: 0; padding: 0; list-style: none; }
+.cl-tick li { font-size: 12.5px; color: var(--soft); padding: 5px 0; border-bottom: 1px solid var(--line); }
+
+.cl-tablewrap { overflow-x: auto; border: 1px solid var(--line); }
+.cl-metrics { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.cl-metrics th { background: var(--black); color: var(--white); padding: 9px 10px; text-align: center; font-weight: 600; font-size: 11px; white-space: nowrap; }
+.cl-metrics th.cl-th-std { background: #3A3A3A; color: #CFCFCF; font-weight: 400; }
+.cl-metrics td { border: 1px solid var(--line); padding: 0; }
+.cl-metrics input { width: 100%; min-width: 86px; border: 0; background: transparent; padding: 8px 9px; text-align: center; font-size: 12.5px; }
+.cl-metrics input:focus { background: var(--red-wash); outline: none; }
+.cl-metrics td.cl-td-period input { text-align: left; font-weight: 700; min-width: 130px; }
+.cl-story { border-left: 3px solid var(--red); background: var(--red-wash); padding: 11px 14px; font-size: 13.5px; margin: 14px 0 0; }
+
+.cl-check { background: var(--white); border: 1px solid var(--line); border-left: 4px solid var(--black); padding: 20px 22px; margin-bottom: 14px; }
+.cl-check.is-off { border-left-color: var(--red); }
+.cl-check h3 { font-family: Anton, sans-serif; font-size: 20px; text-transform: uppercase; letter-spacing: .03em; margin: 0 0 6px; }
+.cl-checktable { border-collapse: collapse; width: 100%; font-size: 13px; }
+.cl-checktable th { text-align: left; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--soft); padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); }
+.cl-checktable td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); }
+.cl-checktable tr.is-off td { color: var(--red); font-weight: 700; }
+
+.cl-keybar { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.cl-keybar .cl-h2 { margin: 0; }
+.cl-toggle { margin-left: auto; display: flex; border: 1px solid var(--ink); }
+.cl-toggle button { background: var(--white); border: 0; padding: 8px 16px; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--soft); }
+.cl-toggle button.is-on { background: var(--black); color: var(--white); }
+
+.cl-activity { background: var(--white); border: 1px solid var(--line); border-left: 4px solid var(--red); padding: 20px 22px; margin-bottom: 12px; }
+.cl-act-head { display: flex; align-items: baseline; gap: 11px; }
+.cl-act-n { font-family: Anton, sans-serif; font-size: 15px; color: var(--red); }
+.cl-act-head h3 { font-family: Anton, sans-serif; font-size: 21px; text-transform: uppercase; letter-spacing: .03em; margin: 0; flex: 1; }
+.cl-mins { font-size: 11.5px; color: var(--soft); font-weight: 700; }
+.cl-act-prompt { font-size: 13.5px; color: var(--soft); font-style: italic; margin: 6px 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.cl-field-block { margin-bottom: 14px; }
+.cl-flabel { font-size: 10px; letter-spacing: .13em; text-transform: uppercase; font-weight: 700; color: var(--black); margin: 0 0 5px; }
+.cl-answer { width: 100%; border: 1px solid var(--line); border-left: 3px solid var(--blue); background: #FAFBFD; padding: 10px 12px; font-size: 13.5px; color: var(--blue); line-height: 1.55; resize: vertical; }
+.cl-answer:focus { background: var(--white); outline: none; border-color: var(--ink); border-left-color: var(--blue); }
+.cl-blank { border: 1px solid var(--ink); height: 74px; background: var(--white); }
+
+.cl-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--soft); margin: 8px 0 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.cl-meta b { color: var(--ink); }
+.cl-meta .cl-flag { color: var(--red); font-weight: 700; }
+.cl-transcript { margin-top: 14px; }
+.cl-line { display: grid; grid-template-columns: 52px 74px 1fr; gap: 8px; padding: 5px 0; font-size: 13.5px; align-items: baseline; }
+.cl-t { color: #AAA; font-size: 11.5px; }
+.cl-spk { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--soft); }
+.cl-sp-agent .cl-spk { color: var(--black); }
+.cl-sp-system .cl-txt { font-style: italic; color: var(--soft); }
+.cl-ann { display: block; margin-top: 5px; font-size: 12px; font-style: normal; padding: 6px 10px; border-left: 3px solid var(--blue); background: #F7F9FC; color: var(--blue); }
+.cl-ann.cl-miss { border-left-color: var(--red); background: var(--red-wash); color: var(--red-deep); }
+.cl-outcome { font-size: 13px; color: var(--soft); font-style: italic; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
+
+.cl-downloads { display: flex; flex-direction: column; gap: 10px; }
+.cl-dl { display: flex; gap: 16px; align-items: center; text-align: left; background: var(--white); border: 1px solid var(--ink); padding: 16px 18px; }
+.cl-dl:hover { background: var(--red-wash); border-color: var(--red); }
+.cl-dl:disabled { border-color: var(--line); opacity: .5; cursor: default; }
+.cl-dl-ext { font-family: Anton, sans-serif; font-size: 15px; letter-spacing: .05em; background: var(--black); color: var(--white); padding: 9px 11px; flex-shrink: 0; }
+.cl-dl span { font-size: 12.5px; color: var(--soft); }
+.cl-dl span strong { display: block; font-size: 15px; margin-bottom: 2px; color: var(--ink); }
+
+.cl-session { display: grid; grid-template-columns: 1fr 330px; gap: 24px; align-items: start; }
+.cl-convo { background: var(--white); border: 1px solid var(--line); }
+.cl-convo-head { display: flex; align-items: center; gap: 9px; padding: 11px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.cl-live { font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase; font-weight: 700; background: var(--red); color: var(--white); padding: 3px 7px; }
+.cl-sep { color: var(--line); }
+.cl-stream { padding: 18px 16px; min-height: 320px; max-height: 50vh; overflow-y: auto; }
+.cl-turn { margin-bottom: 15px; max-width: 78%; }
+.cl-turn p { margin: 0; padding: 10px 13px; font-size: 14px; }
+.cl-who { font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase; font-weight: 700; color: var(--soft); display: block; margin-bottom: 3px; }
+.cl-assistant p { background: var(--paper); border-left: 3px solid var(--line); }
+.cl-user { margin-left: auto; }
+.cl-user p { background: var(--black); color: var(--white); }
+.cl-user .cl-who { text-align: right; }
+.cl-typing { display: flex; gap: 4px; align-items: center; }
+.cl-typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--soft); animation: cl-blink 1.3s infinite; }
+.cl-typing i:nth-child(2) { animation-delay: .18s; }
+.cl-typing i:nth-child(3) { animation-delay: .36s; }
+@keyframes cl-blink { 0%,60%,100% { opacity: .25 } 30% { opacity: 1 } }
+.cl-compose { border-top: 1px solid var(--line); padding: 12px 16px; }
+.cl-compose textarea { width: 100%; border: 1px solid var(--line); padding: 10px; resize: vertical; font-size: 14px; background: #FCFCFC; }
+.cl-compose .cl-actions { margin-top: 9px; }
+
+.cl-agents { display: grid; grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); gap: 8px; }
+.cl-agent { background: var(--white); border: 1px solid var(--line); border-left: 4px solid var(--line); padding: 12px 14px; text-align: left; }
+.cl-agent.is-on { border-color: var(--ink); border-left-color: var(--red); }
+.cl-agent-name { display: block; font-family: Anton, sans-serif; font-size: 19px; text-transform: uppercase; letter-spacing: .04em; }
+.cl-agent-tag { display: block; font-size: 11px; color: var(--soft); margin-top: 2px; }
+.cl-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.cl-chip { background: var(--white); border: 1px solid var(--line); padding: 7px 13px; font-size: 13.5px; }
+.cl-chip:hover { border-color: var(--ink); }
+.cl-chip.is-on { background: var(--red); border-color: var(--red); color: var(--white); }
+
+.cl-rail { background: var(--white); border: 1px solid var(--line); padding: 18px; }
+.cl-tiles { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+.cl-tile { border: 1px solid var(--line); border-left: 4px solid var(--line); padding: 9px 11px; }
+.cl-tile-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cl-tile-label { font-size: 12.5px; font-weight: 500; }
+.cl-tile-num { font-size: 12px; color: var(--soft); font-weight: 700; }
+.cl-bar { height: 4px; background: var(--paper); margin-top: 7px; }
+.cl-bar span { display: block; height: 100%; background: var(--soft); transition: width .5s ease; }
+.cl-tile.cl-high { border-left-color: var(--black); }
+.cl-tile.cl-high .cl-bar span { background: var(--black); }
+.cl-tile.cl-high .cl-tile-num { color: var(--black); }
+.cl-tile.cl-mid { border-left-color: #A8A8A8; }
+.cl-tile.cl-mid .cl-bar span { background: #A8A8A8; }
+.cl-tile.cl-low { border-left-color: var(--red); }
+.cl-tile.cl-low .cl-bar span { background: var(--red); }
+.cl-tile.cl-low .cl-tile-num { color: var(--red); }
+.cl-tile-body { margin-top: 8px; }
+.cl-ev { font-size: 11.5px; color: var(--soft); margin: 0 0 5px; padding-left: 9px; border-left: 2px solid var(--line); font-style: italic; }
+.cl-fix { font-size: 12.5px; margin: 0; }
+.cl-verdict { margin-top: 18px; padding-top: 16px; border-top: 2px solid var(--red); }
+.cl-headline { font-size: 14.5px; font-weight: 600; margin: 0 0 8px; }
+.cl-kept { font-size: 13px; color: var(--soft); margin: 0; }
+
+.cl-progress { height: 4px; background: var(--line); margin-top: 14px; }
+.cl-progress span { display: block; height: 100%; background: var(--red); transition: width .35s; }
+
+.cl-print { display: none; }
+
+@media (max-width: 900px) {
+  .cl-two, .cl-session { grid-template-columns: 1fr; }
+  .cl-grid2 { grid-template-columns: 1fr; }
+  .cl-main { padding: 20px 16px 50px; }
+  .cl-top { padding: 0 16px; }
+  .cl-tabs { overflow-x: auto; }
+  .cl-turn { max-width: 92%; }
+  .cl-line { grid-template-columns: 44px 1fr; }
+  .cl-line .cl-spk { grid-column: 2; }
+  .cl-line .cl-txt { grid-column: 2; }
+}
+@media (prefers-reduced-motion: reduce) { .cl *, .cl *::before { animation: none !important; transition: none !important; } }
+
+@media print {
+  .cl-app { display: none !important; }
+  .cl { background: #fff; }
+  .cl-print { display: block !important; }
+  ${PRINT_CSS}
+}
+`;
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(<CoachLabRoot />);
+
+</script>
+</body>
+</html>
