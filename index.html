@@ -405,7 +405,7 @@ function CaseStudy({ onCoach }) {
           "should broadly track AHT. Use realistic values, never round numbers.\n" +
           'Return ONLY JSON, no fences: {"columns":["Pay Period","CSAT","CSAT Standard","AHT","AHT Standard",...],' +
           '"rows":[[...],[...],[...]],"story":"one sentence a facilitator could say about what the numbers show"}\n' +
-          'Exactly three rows, three consecutive half-month pay periods. Keep units inside cells ("710 secs", "2:30", "75%").',
+          'Exactly three rows, three consecutive half-month pay periods. Keep units inside cells. AHT, talk time and ACW are always in SECONDS ("710 secs"), never mm:ss. Only hold time uses mm:ss. AHT standard is 600 secs. CSAT standard is 75% and real CSAT sits in the 55-80% range \u2014 never above 86%. FCR means the customer did not call back.',
         messages: [{ role: "user", content:
           "Account: " + accountLine + "\nTeammate: " + p.name + "\nTenure: " + p.tenure +
           "\nDISC: " + p.disc + "\nStar status: " + starText(p.star) + "\nProblem KPM: " + p.kpm +
@@ -455,7 +455,8 @@ function CaseStudy({ onCoach }) {
     const period = metrics.rows[metrics.rows.length - 1][0];
     const resolvedDriver = p.driver || "the account's most common contact reason";
     // A long call is not more turns — it is the same turns with visible dead time between them.
-    const targetTurns = Math.max(10, Math.min(18, Math.round(convo / 55)));
+    // Real contacts vary. Three calls that all run exactly to AHT is the giveaway that they are fake.
+    const SPREAD = [0.6, 1.0, 1.42];   // averages to ~1.0 of the target
 
     const sys =
       "You write realistic contact centre " + (p.channel === "Chat" ? "chat" : "call") + " transcripts that serve as " +
@@ -464,9 +465,10 @@ function CaseStudy({ onCoach }) {
       "HARD CONSTRAINTS:\n" +
       "- Handle time is talk + hold + after-call work. The CONVERSATION you write covers talk + hold only; wrap " +
       "happens after the customer is gone and is never in the transcript.\n" +
-      "- THE FINAL TIMESTAMP MUST BE APPROXIMATELY " + fmtSecs(convo) + " (" + convo + " seconds). This is the single " +
-      "most important constraint. A transcript that ends at 4:00 when the target is " + fmtSecs(convo) + " is a " +
-      "failed transcript, because the whole case study rests on this call being long.\n" +
+      "- Each contact is given its OWN target length below. Hit that one, not the pay-period average. The three " +
+      "contacts deliberately differ \u2014 one shorter, one typical, one long \u2014 because real contacts vary and " +
+      "three calls that all run to exactly the same length read as fabricated. What matters is that the behaviour " +
+      "is visible in each, and that the three AVERAGE out near " + fmtSecs(convo) + ".\n" +
       "- Do NOT reach that length by writing more turns. Reach it the way a real slow call gets slow: leave real " +
       "gaps between timestamps and account for them. Use System lines for the dead time — 'Agent searching order " +
       "system — 40 seconds of silence', 'Placed customer on hold — 1:20', 'Agent re-verifying account details — " +
@@ -490,8 +492,8 @@ function CaseStudy({ onCoach }) {
       '"t":[["00:00","A","what the agent says"],["01:10","C","what the customer says"],["03:20","S","Placed customer on hold — 1:20"]],' +
       '"e":[["03:20","miss","short KSB name","what this moment shows"]]}\n' +
       'Speakers are "A" for agent, "C" for customer, "S" for system. dur, talk, hold and acw are plain numbers of seconds.\n' +
-      "About " + targetTurns + " turns, spread across the full " + fmtSecs(convo) + ". Exactly 3 evidence entries. " +
-      "Every turn under 24 words. Keep the wording tight — a truncated response is useless — but keep the CLOCK long.";
+      "Between 10 and 18 turns, spread across this contact's own target length. Exactly 3 evidence entries. " +
+      "Every turn under 24 words. Keep the wording tight — a truncated response is useless — but keep the CLOCK honest.";
 
     const SPEAKER = { A: "Agent", C: "Customer", S: "System" };
     function normalize(j, i) {
@@ -517,7 +519,7 @@ function CaseStudy({ onCoach }) {
         driver: j.driver || resolvedDriver,
         duration_secs: actual,
         claimed_secs: claimed,
-        short: actual < convo * 0.7,
+        short: actual < Math.round(convo * SPREAD[i]) * 0.7,
         talk_secs: talkN, hold_secs: holdN,
         acw_secs: Number(j.acw ?? j.acw_secs) || 0,
         disposition: j.disp || j.disposition || "Resolved",
@@ -538,8 +540,10 @@ function CaseStudy({ onCoach }) {
             "\nAgent: " + p.name + ", tenure " + p.tenure + ", DISC " + p.disc + " (" + p.discNote + ")" +
             "\nProblem KPM: " + p.kpm + "\nPay period: " + period +
             "\n\nFull trend:\n" + table +
-            "\n\nThis is contact " + (i + 1) + " of 3. Same driver, different customer and different flavour of the " +
-            "same problem. Vary the length slightly around the target so the three average out to it." +
+            "\n\nThis is contact " + (i + 1) + " of 3. Same driver, different customer, different flavour of the " +
+            "same problem.\nTHIS CONTACT'S TARGET LENGTH: " + fmtSecs(Math.round(convo * SPREAD[i])) +
+            " (" + Math.round(convo * SPREAD[i]) + " seconds of conversation). Its final timestamp must land near " +
+            "that, not near the pay-period average." +
             (i === 2 ? " Make this one the clearest example of the problem behaviour." : "") +
             (scriptNotes.trim()
               ? "\n\nFACILITATOR NOTES on the previous attempt — these override the defaults, follow them exactly:\n" +
@@ -558,9 +562,11 @@ function CaseStudy({ onCoach }) {
                 "Account: " + accountLine + "\nDriver: " + resolvedDriver +
                 "\nAgent: " + p.name + " (" + p.disc + ")\nPay period: " + period +
                 "\n\nYour previous attempt ended at " + fmtSecs(n.duration_secs) + ", but this contact must run " +
-                "about " + fmtSecs(convo) + ". Rewrite it. Keep roughly the same number of turns and the same story, " +
+                "about " + fmtSecs(Math.round(convo * SPREAD[i])) + ". Rewrite it. Keep the same story and roughly the " +
+                "same number of turns, " +
                 "but stretch the CLOCK: bigger gaps between timestamps, System lines accounting for the dead time, " +
-                "the agent re-explaining and re-verifying. The final timestamp must be close to " + fmtSecs(convo) + "." }],
+                "the agent re-explaining and re-verifying. The final timestamp must be close to " +
+                fmtSecs(Math.round(convo * SPREAD[i])) + "." }],
               maxTokens: 2000,
             });
             const n2 = normalize(j2, i);
@@ -1085,6 +1091,8 @@ function MetricsTable({ metrics, onEdit }) {
 }
 
 function CrossCheck({ check, tolerance = 15 }) {
+  // Handle time, talk and wrap are reported in seconds on a scorecard; only hold reads as mm:ss.
+  const show = (label, v) => (/hold/i.test(label) ? fmtSecs(v) : Math.round(v) + " secs");
   const bad = check.filter((r) => !r.aligned);
   return (
     <div className={"cl-check" + (bad.length ? " is-off" : "")}>
@@ -1104,7 +1112,7 @@ function CrossCheck({ check, tolerance = 15 }) {
         <tbody>
           {check.map((r) => (
             <tr key={r.label} className={r.aligned ? "" : "is-off"}>
-              <td>{r.label}</td><td>{fmtSecs(r.table)}</td><td>{fmtSecs(r.calls)}</td>
+              <td>{r.label}</td><td>{show(r.label, r.table)}</td><td>{show(r.label, r.calls)}</td>
               <td>{(r.delta > 0 ? "+" : "") + r.delta + "%"}</td>
               <td>{r.aligned ? "OK" : "Off"}</td>
             </tr>
@@ -1140,11 +1148,12 @@ function Transcript({ s, n, showKey = true }) {
         <span><b>{s.driver}</b></span>
         <span>{s.date}</span>
         <span className={s.short ? "cl-flag" : ""}>
-          Duration {fmtSecs(s.duration_secs)}{s.short ? " · too short for this AHT" : ""}
+          Duration {s.duration_secs} secs ({fmtSecs(s.duration_secs)})
+          {s.short ? " · shorter than its target" : ""}
         </span>
-        <span>Talk {fmtSecs(s.talk_secs)}</span>
+        <span>Talk {s.talk_secs} secs</span>
         <span className={s.hold_secs > 60 ? "cl-flag" : ""}>Hold {fmtSecs(s.hold_secs)}</span>
-        <span>ACW {fmtSecs(s.acw_secs)}</span>
+        <span>ACW {s.acw_secs} secs</span>
         <span>{s.disposition}</span>
       </div>
       {open && (
@@ -1471,66 +1480,66 @@ const SCENARIOS = [
    no FCR, while T-Mobile shows FCR and transfer rate, from the same persona. */
 
 const METRICS = {
-  csat:       { label: "CSAT", unit: "%", better: "up" },
-  quality:    { label: "Quality", unit: "%", better: "up" },
-  compliance: { label: "Compliance", unit: "%", better: "up" },
+  csat:       { label: "CSAT", unit: "%", better: "up", max: 86 },
+  quality:    { label: "Quality", unit: "%", better: "up", max: 97 },
+  compliance: { label: "Compliance", unit: "%", better: "up", max: 100 },
   aht:        { label: "AHT", unit: "secs", better: "down" },
   talk:       { label: "Talk Time", unit: "secs", better: "down" },
   hold:       { label: "Hold Time", unit: "clock", better: "down" },
   acw:        { label: "ACW", unit: "secs", better: "down" },
-  transfer:   { label: "Transfer Rate", unit: "%", better: "down" },
-  fcr:        { label: "FCR", unit: "%", better: "up" },
-  recontact:  { label: "Recontact", unit: "%", better: "down" },
-  adherence:  { label: "Adherence", unit: "%", better: "up" },
-  empathy:    { label: "Empathy", unit: "/4", better: "up" },
-  tools:      { label: "Tool Usage", unit: "%", better: "up" },
-  completion: { label: "Order Completion", unit: "%", better: "up" },
-  conversion: { label: "Conversion", unit: "%", better: "up" },
+  transfer:   { label: "Transfer Rate", unit: "%", better: "down", min: 1 },
+  fcr:        { label: "FCR (no callback)", unit: "%", better: "up", max: 88 },  // resolved, no call back
+  recontact:  { label: "Recontact", unit: "%", better: "down", min: 2 },
+  adherence:  { label: "Adherence", unit: "%", better: "up", max: 100 },
+  empathy:    { label: "Empathy", unit: "/4", better: "up", max: 4 },
+  tools:      { label: "Tool Usage", unit: "%", better: "up", max: 99 },
+  completion: { label: "Order Completion", unit: "%", better: "up", max: 99 },
+  conversion: { label: "Conversion", unit: "%", better: "up", max: 45 },
   frt:        { label: "First Response", unit: "secs", better: "down" },
-  resolution: { label: "Resolution Rate", unit: "%", better: "up" },
+  resolution: { label: "Resolution Rate", unit: "%", better: "up", max: 95 },
 };
 
 const PROGRAMS = [
   { id: "dominos", name: "Domino's", channel: "Voice",
     note: "Speed and order accuracy. No FCR — a repeat call is a new order.",
     tracks: ["aht", "hold", "acw", "completion", "csat", "quality"],
-    stds: { aht: 360, hold: 45, acw: 25, completion: 95, csat: 80, quality: 90 } },
+    stds: { aht: 600, hold: 45, acw: 25, completion: 95, csat: 75, quality: 90 } },
   { id: "tmobile", name: "T-Mobile", channel: "Voice",
     note: "Resolution and retention. Transfers and repeat calls both hurt.",
     tracks: ["aht", "hold", "fcr", "transfer", "csat", "quality"],
-    stds: { aht: 600, hold: 90, fcr: 75, transfer: 10, csat: 80, quality: 90 } },
+    stds: { aht: 600, hold: 90, fcr: 75, transfer: 10, csat: 75, quality: 90 } },
   { id: "paypal", name: "PayPal", channel: "Blended",
     note: "Regulated. Compliance sits alongside resolution.",
     tracks: ["aht", "hold", "fcr", "compliance", "csat", "quality"],
-    stds: { aht: 540, hold: 75, fcr: 78, compliance: 98, csat: 82, quality: 90 } },
+    stds: { aht: 600, hold: 75, fcr: 75, compliance: 98, csat: 75, quality: 90 } },
   { id: "shopee", name: "Shopee", channel: "Chat",
     note: "Chat. First response time and concurrency replace hold and ACW.",
     tracks: ["frt", "aht", "resolution", "csat", "quality"],
-    stds: { frt: 30, aht: 480, resolution: 85, csat: 80, quality: 90 } },
+    stds: { frt: 30, aht: 600, resolution: 85, csat: 75, quality: 90 } },
   { id: "monee", name: "Monee", channel: "Chat",
     note: "Lending. Verification accuracy matters more than speed.",
     tracks: ["frt", "aht", "compliance", "resolution", "csat"],
-    stds: { frt: 35, aht: 520, compliance: 97, resolution: 85, csat: 80 } },
+    stds: { frt: 35, aht: 600, compliance: 97, resolution: 85, csat: 75 } },
   { id: "lendingtree", name: "LendingTree", channel: "Voice",
     note: "Lead conversion is the number that counts.",
     tracks: ["conversion", "aht", "talk", "csat", "quality"],
-    stds: { conversion: 22, aht: 480, talk: 400, csat: 80, quality: 90 } },
+    stds: { conversion: 22, aht: 600, talk: 400, csat: 75, quality: 90 } },
   { id: "clearcover", name: "Clearcover", channel: "Blended",
     note: "Claims. Accuracy and follow-through over speed.",
     tracks: ["fcr", "aht", "hold", "compliance", "csat", "quality"],
-    stds: { fcr: 72, aht: 660, hold: 100, compliance: 97, csat: 82, quality: 90 } },
+    stds: { fcr: 75, aht: 600, hold: 100, compliance: 97, csat: 75, quality: 90 } },
   { id: "dhgate", name: "DHgate", channel: "Chat",
     note: "Cross-border. Long resolution cycles, heavy tool use.",
     tracks: ["frt", "aht", "resolution", "tools", "csat"],
-    stds: { frt: 40, aht: 540, resolution: 80, tools: 90, csat: 78 } },
+    stds: { frt: 40, aht: 600, resolution: 80, tools: 90, csat: 78 } },
   { id: "radlife", name: "Rad Life Mobility", channel: "Voice",
     note: "Considered purchases. Empathy and completion over speed.",
     tracks: ["aht", "hold", "completion", "empathy", "csat", "quality"],
-    stds: { aht: 720, hold: 120, completion: 92, empathy: 3.0, csat: 85, quality: 90 } },
+    stds: { aht: 600, hold: 120, completion: 92, empathy: 3.0, csat: 75, quality: 90 } },
   { id: "viome", name: "Viome", channel: "Blended",
     note: "Health subscriptions. Retention and clarity.",
     tracks: ["aht", "fcr", "empathy", "csat", "quality"],
-    stds: { aht: 600, fcr: 76, empathy: 3.0, csat: 84, quality: 90 } },
+    stds: { aht: 600, fcr: 75, empathy: 3.0, csat: 75, quality: 90 } },
 ];
 
 /* ---- behaviours ------------------------------------------------------
@@ -1613,7 +1622,11 @@ function fmtMetric(key, val) {
 /* Shapes are signed deviation from standard in the metric's own direction:
    -13 on compliance means 13% below standard; +18 on AHT means 18% above it. */
 function applyDev(key, std, devPct) {
-  return std * (1 + devPct / 100);
+  const m = METRICS[key] || {};
+  let v = std * (1 + devPct / 100);
+  if (m.max !== undefined) v = Math.min(v, m.max);   // nobody posts 96% CSAT
+  if (m.min !== undefined) v = Math.max(v, m.min);
+  return v;
 }
 
 function buildScorecard(scenarioId, programId, behaviourId) {
