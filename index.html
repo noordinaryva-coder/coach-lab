@@ -67,7 +67,16 @@ async function callClaude({ system, messages, maxTokens = 1000 }) {
     throw new Error("Request failed (" + res.status + ")");
   }
   const data = await res.json();
-  return (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+  const blocks = Array.isArray(data.content) ? data.content : [];
+  const text = blocks.filter((b) => b.type === "text" && b.text).map((b) => b.text).join("\n");
+  if (!text.trim()) {
+    // 200 but nothing usable — say what actually came back so it is debuggable.
+    const kinds = blocks.map((b) => b.type).join(", ") || "none";
+    const stop = data.stop_reason ? " stop_reason=" + data.stop_reason : "";
+    const err = data.error && data.error.message ? " " + data.error.message : "";
+    throw new Error("Model returned no text (blocks: " + kinds + stop + ")." + err);
+  }
+  return text;
 }
 
 function repairJSON(text) {
@@ -91,7 +100,7 @@ function repairJSON(text) {
 function parseJSON(raw) {
   const c = raw.replace(/```json/g, "").replace(/```/g, "").trim();
   const s = c.indexOf("{");
-  if (s === -1) throw new Error("No JSON object in response");
+  if (s === -1) throw new Error("No JSON in response. Got: " + (c.slice(0, 120) || "(empty)"));
   const e = c.lastIndexOf("}");
   const whole = e > s ? c.slice(s, e + 1) : null;
   if (whole) { try { return JSON.parse(whole); } catch (err) { /* fall through */ } }
@@ -372,7 +381,7 @@ function CaseStudy({ onCoach }) {
           "Account: " + accountName + " (" + sector + ")\nChannel: " + p.channel + "\nStar status: " + starText(p.star) + " \u2014 " + starOf(p.star).coach +
           "\nProblem KPM: " + p.kpm + "\nProblem behaviour: " + p.behaviour +
           (p.driver ? "\nKeep this contact driver: " + p.driver : "") }],
-        maxTokens: 600,
+        maxTokens: 1000,
       });
       setP((x) => ({ ...x, ...j, driverMode: (acct.drivers || []).includes(j.driver) ? "list" : "custom" }));
     } catch (e) { setError(e.message || "Could not generate the teammate. Try again."); }
@@ -406,7 +415,7 @@ function CaseStudy({ onCoach }) {
             ? "\n\nFACILITATOR NOTES on the previous attempt — these override the defaults, follow them exactly:\n" +
               metricNotes.trim()
             : "") }],
-        maxTokens: 1000,
+        maxTokens: 2000,
       });
       setMetrics(j); setScripts([]); setAnswers([]); setStep(1);
       if (!j.columns.some((c) => /AHT|Handle/i.test(c) && !/standard/i.test(c))) {
@@ -628,7 +637,7 @@ function CaseStudy({ onCoach }) {
           messages: [{ role: "user", content:
             ctx + "\n\nActivity: " + act.title + "\nWhat the group is asked: " + act.prompt +
             "\nWhat the answer key must contain: " + act.ask }],
-          maxTokens: 900,
+          maxTokens: 1500,
         });
         out.push({ ...act, fields: j.fields || [] });
       } catch (e) { out.push({ ...act, fields: [], failed: true }); }
@@ -811,7 +820,7 @@ function CaseStudy({ onCoach }) {
             </Field>
             <Field label="Star Status">
               <select value={p.star} onChange={(e) => set("star", e.target.value)}>
-                {STARS.map((x) => <option key={x.id} value={x.id}>{x.label} \u2014 {x.axis}</option>)}
+                {STARS.map((x) => <option key={x.id} value={x.id}>{x.label + " \u2014 " + x.axis}</option>)}
               </select>
             </Field>
             <Field label="Context — motivation and life situation">
