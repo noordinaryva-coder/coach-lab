@@ -279,13 +279,19 @@ const ACCOUNTS = [
 ];
 const CHANNELS = ["Voice", "Chat", "Blended"];
 const DISC = ["High D", "High I", "High S", "High C"];
-const STAR = [
-  "Rising Star (motivated, performance still low)",
-  "Star (high performance, high motivation)",
-  "Solid (meets standard, steady)",
-  "Fading (was strong, now slipping)",
-  "At Risk (low performance, low motivation)",
+/* Star Status is a 2x2 of performance against motivation. */
+const STARS = [
+  { id: "super", label: "Super Star", axis: "High performance / High motivation",
+    coach: "Do not ignore them. Support and reinforce, identify their best practices, give them responsibility." },
+  { id: "steady", label: "Steady Star", axis: "High performance / Low motivation",
+    coach: "Uncover what changed in the motivation, not the output. Build a plan that solves the motivation issue." },
+  { id: "rising", label: "Rising Star", axis: "Low performance / High motivation",
+    coach: "Motivate through development. Reinforce the positive behaviours and redirect the opportunities." },
+  { id: "falling", label: "Falling Star", axis: "Low performance / Low motivation",
+    coach: "Uncover what changed in BOTH motivation and performance. This person performed once \u2014 find out what changed." },
 ];
+const starOf = (id) => STARS.find((x) => x.id === id) || STARS[2];
+const starText = (id) => { const t = starOf(id); return t.label + " (" + t.axis + ")"; };
 const KPMS = ["AHT", "CSAT", "FCR", "Transfer Rate", "Quality Score", "Sales Conversion", "Hold Time", "Resolution Rate"];
 const CASE_BEHAVIOURS = [
   "Long holds / dead air", "Weak empathy and acknowledgement", "Not probing, jumps to solution",
@@ -323,7 +329,7 @@ function CaseStudy({ onCoach }) {
     account: "paypal", customAccount: "", customSector: "",
     channel: "Blended", driver: "", driverMode: "list",
     name: "", tenure: "95 days", disc: "High D", discNote: "",
-    attendance: "98%", star: STAR[0], context: "",
+    attendance: "98%", star: "rising", context: "",
     kpm: "AHT", behaviour: "Long holds / dead air", difficulty: "Realistic",
   });
   const [metrics, setMetrics] = useState(null);
@@ -334,6 +340,8 @@ function CaseStudy({ onCoach }) {
   const [error, setError] = useState("");
   const [showKey, setShowKey] = useState(true);
   const [printMode, setPrintMode] = useState("key");
+  const [metricNotes, setMetricNotes] = useState("");
+  const [scriptNotes, setScriptNotes] = useState("");
 
   const set = (k, v) => setP((x) => ({ ...x, [k]: v }));
 
@@ -361,7 +369,7 @@ function CaseStudy({ onCoach }) {
           '"discNote":"how that style shows up at work; semicolon separated traits",' +
           '"attendance":"e.g. 98%","context":"two facts about motivation and life situation, semicolon separated"}',
         messages: [{ role: "user", content:
-          "Account: " + accountName + " (" + sector + ")\nChannel: " + p.channel + "\nStar status: " + p.star +
+          "Account: " + accountName + " (" + sector + ")\nChannel: " + p.channel + "\nStar status: " + starText(p.star) + " \u2014 " + starOf(p.star).coach +
           "\nProblem KPM: " + p.kpm + "\nProblem behaviour: " + p.behaviour +
           (p.driver ? "\nKeep this contact driver: " + p.driver : "") }],
         maxTokens: 600,
@@ -391,9 +399,13 @@ function CaseStudy({ onCoach }) {
           'Exactly three rows, three consecutive half-month pay periods. Keep units inside cells ("710 secs", "2:30", "75%").',
         messages: [{ role: "user", content:
           "Account: " + accountLine + "\nTeammate: " + p.name + "\nTenure: " + p.tenure +
-          "\nDISC: " + p.disc + "\nStar status: " + p.star + "\nProblem KPM: " + p.kpm +
+          "\nDISC: " + p.disc + "\nStar status: " + starText(p.star) + "\nProblem KPM: " + p.kpm +
           "\nProblem behaviour: " + p.behaviour + "\nDifficulty: " + p.difficulty +
-          (p.difficulty === "Messy (mixed signals)" ? " — include one metric that misleads a careless reader." : "") }],
+          (p.difficulty === "Messy (mixed signals)" ? " — include one metric that misleads a careless reader." : "") +
+          (metricNotes.trim()
+            ? "\n\nFACILITATOR NOTES on the previous attempt — these override the defaults, follow them exactly:\n" +
+              metricNotes.trim()
+            : "") }],
         maxTokens: 1000,
       });
       setMetrics(j); setScripts([]); setAnswers([]); setStep(1);
@@ -519,8 +531,12 @@ function CaseStudy({ onCoach }) {
             "\n\nFull trend:\n" + table +
             "\n\nThis is contact " + (i + 1) + " of 3. Same driver, different customer and different flavour of the " +
             "same problem. Vary the length slightly around the target so the three average out to it." +
-            (i === 2 ? " Make this one the clearest example of the problem behaviour." : "") }],
-          maxTokens: 1000,
+            (i === 2 ? " Make this one the clearest example of the problem behaviour." : "") +
+            (scriptNotes.trim()
+              ? "\n\nFACILITATOR NOTES on the previous attempt — these override the defaults, follow them exactly:\n" +
+                scriptNotes.trim()
+              : "") }],
+          maxTokens: 2000,
         });
         let n = normalize(j, i);
         if (!n.turns.length) throw new Error("no turns returned");
@@ -536,7 +552,7 @@ function CaseStudy({ onCoach }) {
                 "about " + fmtSecs(convo) + ". Rewrite it. Keep roughly the same number of turns and the same story, " +
                 "but stretch the CLOCK: bigger gaps between timestamps, System lines accounting for the dead time, " +
                 "the agent re-explaining and re-verifying. The final timestamp must be close to " + fmtSecs(convo) + "." }],
-              maxTokens: 1000,
+              maxTokens: 2000,
             });
             const n2 = normalize(j2, i);
             if (n2.turns.length && n2.duration_secs > n.duration_secs) n = n2;
@@ -592,7 +608,8 @@ function CaseStudy({ onCoach }) {
     const ctx =
       "Account: " + accountLine + "\nTeammate: " + p.name + "\nTenure: " + p.tenure +
       "\nDISC style: " + p.disc + " — " + p.discNote + "\nAttendance: " + p.attendance +
-      "\nStar status: " + p.star + "\nContext: " + p.context +
+      "\nStar status: " + starText(p.star) + "\nHow to coach this status: " + starOf(p.star).coach +
+      "\nContext: " + p.context +
       "\n\nPerformance trend:\n" + table + "\n\nCall evidence:\n" + evidence;
 
     const out = [];
@@ -636,7 +653,7 @@ function CaseStudy({ onCoach }) {
       ["Channel", p.channel], ["Contact driver", p.driver || "Not specified"], [],
       ["TEAMMATE PROFILE"], ["Name", p.name], ["Tenure", p.tenure],
       ["DISC style", p.disc], ["", p.discNote], ["Attendance", p.attendance],
-      ["Star Status", p.star], ["", p.context],
+      ["Star Status", starText(p.star)], ["", p.context],
     ];
     const ws1 = XLSX.utils.aoa_to_sheet(info);
     ws1["!cols"] = [{ wch: 18 }, { wch: 78 }];
@@ -657,6 +674,23 @@ function CaseStudy({ onCoach }) {
       const ws3 = XLSX.utils.aoa_to_sheet(aoa);
       ws3["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 30 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 20 }];
       XLSX.utils.book_append_sheet(wb, ws3, "Contacts");
+
+      // full turn-by-turn transcripts, one sheet per contact
+      scripts.filter((x) => !x.failed).forEach((x, i) => {
+        const t = [["CONTACT", x.contact_id], ["Driver", x.driver], ["Date", x.date],
+          ["Duration", fmtSecs(x.duration_secs)], ["Talk", fmtSecs(x.talk_secs)],
+          ["Hold", fmtSecs(x.hold_secs)], ["ACW", fmtSecs(x.acw_secs)],
+          ["Disposition", x.disposition], [], ["Time", "Speaker", "What was said"]];
+        (x.turns || []).forEach((tn) => t.push([tn.t, tn.speaker, tn.text]));
+        if ((x.evidence || []).length) {
+          t.push([]); t.push(["ANNOTATIONS (facilitator)"]);
+          t.push(["Time", "Type", "KSB", "What it shows"]);
+          x.evidence.forEach((e) => t.push([e.t, e.type === "miss" ? "MISS" : "STRENGTH", e.ksb, e.note]));
+        }
+        const ws = XLSX.utils.aoa_to_sheet(t);
+        ws["!cols"] = [{ wch: 10 }, { wch: 12 }, { wch: 80 }, { wch: 40 }];
+        XLSX.utils.book_append_sheet(wb, ws, "Contact " + (i + 1));
+      });
     }
     const safe = (p.name || "case").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
     XLSX.writeFile(wb, safe + "-case-metrics.xlsx");
@@ -777,7 +811,7 @@ function CaseStudy({ onCoach }) {
             </Field>
             <Field label="Star Status">
               <select value={p.star} onChange={(e) => set("star", e.target.value)}>
-                {STAR.map((s) => <option key={s}>{s}</option>)}
+                {STARS.map((x) => <option key={x.id} value={x.id}>{x.label} \u2014 {x.axis}</option>)}
               </select>
             </Field>
             <Field label="Context — motivation and life situation">
@@ -825,6 +859,17 @@ function CaseStudy({ onCoach }) {
           </p>
           <MetricsTable metrics={metrics} onEdit={editCell} />
           {metrics.story && <p className="cl-story">{metrics.story}</p>}
+
+          <div className="cl-notes">
+            <p className="cl-eyebrow">Notes before regenerating</p>
+            <p className="cl-fine">
+              Say what is wrong and it will be followed exactly on the next attempt \u2014 rather than
+              rolling the dice again. Left blank, nothing changes.
+            </p>
+            <textarea rows={3} value={metricNotes} onChange={(e) => setMetricNotes(e.target.value)}
+              placeholder="Hold time is too extreme, keep it under 2 minutes. Make CSAT improve across all three periods so there is something to reinforce." />
+          </div>
+
           <div className="cl-actions">
             <button className="cl-btn cl-ghost" onClick={() => setStep(0)}>Back</button>
             <button className="cl-btn cl-ghost" onClick={buildMetrics} disabled={!!busy}>
@@ -858,6 +903,15 @@ function CaseStudy({ onCoach }) {
           )}
           {check && <CrossCheck check={check} tolerance={ALIGN_TOLERANCE} />}
           {scripts.map((s, i) => <Transcript key={i} s={s} n={i + 1} showKey={showKey} />)}
+          <div className="cl-notes">
+            <p className="cl-eyebrow">Notes before regenerating</p>
+            <p className="cl-fine">
+              Tell it what to change and it will follow that exactly on the next attempt.
+            </p>
+            <textarea rows={3} value={scriptNotes} onChange={(e) => setScriptNotes(e.target.value)}
+              placeholder="Contact 2 was too short. Make the customer angrier in one of them. The agent sounds too polished for 95 days tenure." />
+          </div>
+
           <div className="cl-actions">
             <button className="cl-btn cl-ghost" onClick={() => setStep(1)}>Back to metrics</button>
             <button className="cl-btn cl-ghost" onClick={buildScripts} disabled={!!busy}>
@@ -958,7 +1012,7 @@ function CaseStudy({ onCoach }) {
             </p>
             <button className="cl-btn cl-dark" disabled={!ready} onClick={() =>
               onCoach && onCoach({
-                name: p.name, disc: p.disc, discNote: p.discNote, star: p.star,
+                name: p.name, disc: p.disc, discNote: p.discNote, star: starText(p.star),
                 tenure: p.tenure, context: p.context, behaviour: p.behaviour,
                 kpm: p.kpm, accountLine, metrics,
                 calls: scripts.filter((s) => !s.failed).map((s) =>
@@ -1128,7 +1182,7 @@ function ProfileCard({ p, accountLine }) {
         <Row k="Name" v={p.name || "—"} />
         <Row k="DISC style" v={p.disc} note={p.discNote} />
         <Row k="Attendance" v={p.attendance} />
-        <Row k="Star Status" v={p.star} note={p.context} />
+        <Row k="Star Status" v={starText(p.star)} note={p.context} />
         <Row k="Tenure" v={p.tenure} />
       </div>
     </aside>
@@ -1167,7 +1221,7 @@ function PrintDoc({ p, accountLine, metrics, scripts, answers, check, mode }) {
         <table className="pg-meta"><tbody>
           {[["Name", p.name], ["Tenure", p.tenure],
             ["DISC style", p.disc + (p.discNote ? " — " + p.discNote : "")],
-            ["Attendance", p.attendance], ["Star Status", p.star],
+            ["Attendance", p.attendance], ["Star Status", starText(p.star)],
             ["Context", p.context], ["Account", accountLine]].map(([k, v]) => (
             <tr key={k}><td>{k}</td><td>{v}</td></tr>
           ))}
@@ -1264,7 +1318,7 @@ body{padding-top:46px}
 
   h += "<section class='pg'><h2>Your Teammate's Profile</h2><table class='pg-meta'><tbody>";
   [["Name", p.name], ["Tenure", p.tenure], ["DISC style", p.disc + (p.discNote ? " — " + p.discNote : "")],
-   ["Attendance", p.attendance], ["Star Status", p.star], ["Context", p.context], ["Account", accountLine]]
+   ["Attendance", p.attendance], ["Star Status", starText(p.star)], ["Context", p.context], ["Account", accountLine]]
     .forEach(([k, v]) => { h += "<tr><td>" + esc(k) + "</td><td>" + esc(v) + "</td></tr>"; });
   h += "</tbody></table><h2>Performance Trend Report</h2><table class='pg-table'><thead><tr>";
   metrics.columns.forEach((c) => (h += "<th>" + esc(c) + "</th>"));
@@ -2481,6 +2535,9 @@ const CSS = `
 .cl-metrics input { width: 100%; min-width: 86px; border: 0; background: transparent; padding: 8px 9px; text-align: center; font-size: 12.5px; }
 .cl-metrics input:focus { background: var(--red-wash); outline: none; }
 .cl-metrics td.cl-td-period input { text-align: left; font-weight: 700; min-width: 130px; }
+.cl-notes { background: #FAFAFA; border: 1px solid var(--line); padding: 14px 16px; margin-top: 14px; }
+.cl-notes textarea { width: 100%; border: 1px solid var(--line); background: var(--white); padding: 10px; font-size: 13.5px; resize: vertical; }
+.cl-notes .cl-fine { margin: 0 0 8px; }
 .cl-story { border-left: 3px solid var(--red); background: var(--red-wash); padding: 11px 14px; font-size: 13.5px; margin: 14px 0 0; }
 
 .cl-check { background: var(--white); border: 1px solid var(--line); border-left: 4px solid var(--black); padding: 20px 22px; margin-bottom: 14px; }
