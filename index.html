@@ -145,6 +145,11 @@ function fmtSecs(n) {
   const s = Math.round(n % 60);
   return m + ":" + String(s).padStart(2, "0");
 }
+function fmtDurationLong(totalSecs) {
+  const m = Math.floor(totalSecs / 60);
+  const s = Math.round(totalSecs % 60);
+  return m + " mins " + s + " seconds";
+}
 
 /* ============================= SHELL ============================== */
 
@@ -1878,6 +1883,7 @@ function Practice({ handoff, onClearHandoff }) {
   const [band, setBand] = useState("all");
   const [cardOpen, setCardOpen] = useState(true);
   const [showTell, setShowTell] = useState(false);
+  const [showObs, setShowObs] = useState(false);
   const [started, setStarted] = useState(false);
   const [turns, setTurns] = useState([]);
   const [draft, setDraft] = useState("");
@@ -1920,34 +1926,62 @@ function Practice({ handoff, onClearHandoff }) {
       const exceptions = exceptionPeriods(shape.traj);
       const gapIdx = [0, 1, 2].filter((i) => !exceptions.includes(i));
       const totalCalls = 3 + exceptions.length;
-      const gapLabels = gapIdx.map((i) => PERIODS[i]);
-      const exceptionLabels = exceptions.map((i) => PERIODS[i]);
+
+      // The chronological slate of calls to write: 3 gap calls spread across
+      // the non-exception periods, plus one call per exception period.
+      const slots = [];
+      for (let n = 0; n < 3; n++) slots.push({ periodIdx: gapIdx[n % gapIdx.length], gap: true });
+      exceptions.forEach((i) => slots.push({ periodIdx: i, gap: false }));
+      slots.sort((a, b) => a.periodIdx - b.periodIdx);
+
+      // Duration is computed, not left to the model — a "dead air" gap call
+      // should run long, a "compliance" gap call should run suspiciously
+      // short, because that's the account's own AHT standard deviated by
+      // this exact behaviour's footprint. A strength call runs near standard,
+      // since nothing was costing time on that one. Small random jitter so
+      // three calls never land on an identical duration.
+      const ahtStd = (card.program && card.program.stds && card.program.stds.aht) || 600;
+      const footprintAht = (card.behaviour && card.behaviour.footprint && card.behaviour.footprint.aht) || 0;
+      const callPlans = slots.map((s, idx) => {
+        const devPct = s.gap ? footprintAht * shape.traj[s.periodIdx] : 0;
+        const base = applyDev("aht", ahtStd, devPct);
+        const jitter = 0.88 + Math.random() * 0.24;
+        const durationSecs = Math.max(120, Math.round(base * jitter));
+        return { idx, period: PERIODS[s.periodIdx], gap: s.gap, durationSecs, durationLabel: fmtDurationLong(durationSecs) };
+      });
+      const plansText = callPlans.map((c) =>
+        "Call " + (c.idx + 1) + ": pay period " + c.period + ", duration " + c.durationLabel +
+        ", behaviour is " + (c.gap ? "MISSING on this call" : "PRESENT and done well on this call")
+      ).join("\n");
+
       const j = await callJSON({
         system:
           "You write short, specific call-observation notes for a coaching case study — like a team leader's own " +
           "notebook after listening to calls, before sitting down to coach someone.\n" +
-          "STRUCTURE (follow exactly):\n" +
-          "- Write exactly " + totalCalls + " call entries.\n" +
-          "- Exactly 3 of them show the behaviour MISSING — pull only from these pay periods: " + gapLabels.join(", ") + ".\n" +
-          (exceptions.length
-            ? "- The remaining " + exceptions.length + " call(s) show the behaviour actually happening WELL — pull " +
-              "only from these pay periods: " + exceptionLabels.join(", ") + ". This is a real moment, not a fluke " +
-              "— capture specifically what the agent did right.\n"
-            : "") +
-          "- Every note is SPECIFIC: what the customer needed or said, what the agent actually said or did (or " +
-          "didn't). Plain, spoken language a coach would use out loud, one short sentence.\n" +
-          "- Include a short near-verbatim line of what the agent said on the call — under 16 words.\n" +
-          "- Vary the calls — different customer situations, different specific moments, never the same sentence reworded.\n" +
+          "For each call listed below, write:\n" +
+          "- summary: one sentence, what the contact was actually about (the customer's real situation).\n" +
+          "- behaviorNote: ONE specific moment — a timestamp that falls within the call's stated duration, what " +
+          "the customer said or needed right then, and what the agent actually said in response. If the behaviour " +
+          "is missing, the agent's line must clearly demonstrate the miss. If present, it must clearly demonstrate " +
+          "doing it well.\n" +
+          "- vocStart and vocEnd: the customer's likely sentiment at the start and end of the call — each exactly " +
+          "one of Promoter, Passive, Detractor. A missed behaviour should plausibly move sentiment toward " +
+          "Detractor by the end; a well-handled one should hold steady or move toward Promoter.\n" +
+          "- date: a specific date inside the call's stated pay period.\n" +
+          "Vary the calls — different customer situations each time, never the same sentence reworded.\n\n" +
           "Context:\nAgent: " + agent.name + " — " + agent.brief + "\nAccount: " + programName +
           "\nBehaviour focus: " + topic + (card.behaviour && card.behaviour.note ? " — " + card.behaviour.note : "") +
-          "\nWhy this pattern happens: " + (shape.tell || "") + "\n" +
-          'Return ONLY JSON: {"calls":[{"period":"one of the period labels above","date":"a specific date inside ' +
-          'that period","gap":true|false,"quote":"under 16 words, what the agent actually said","note":"under 18 ' +
-          'words, what this moment shows"}]}\nExactly ' + totalCalls + ' entries total, in chronological order by period.',
-        messages: [{ role: "user", content: "Generate the call observations now." }],
-        maxTokens: 900,
+          "\nWhy this pattern happens: " + (shape.tell || "") + "\n\nCALLS TO WRITE:\n" + plansText + "\n\n" +
+          'Return ONLY JSON: {"calls":[{"summary":"one sentence","date":"a date inside the stated pay period",' +
+          '"behaviorNote":{"timestamp":"m:ss into the call","customerLine":"under 18 words","agentLine":"under 18 ' +
+          'words, near-verbatim"},"vocStart":"Promoter|Passive|Detractor","vocEnd":"Promoter|Passive|Detractor"}, ...]}\n' +
+          "Exactly " + totalCalls + " entries, same order as the calls listed above.",
+        messages: [{ role: "user", content: "Write the call observations now." }],
+        maxTokens: 1100,
       });
-      const calls = (j.calls || []).slice(0, totalCalls);
+
+      const written = (j.calls || []).slice(0, totalCalls);
+      const calls = callPlans.map((plan, i) => ({ ...plan, ...(written[i] || {}) }));
       const gapCount = calls.filter((c) => c.gap).length;
       setObservations({ calls, totalCalls, gapCount });
     } catch (e) {
@@ -2402,60 +2436,6 @@ function Practice({ handoff, onClearHandoff }) {
             </p>
           )}
 
-          {shape && (
-            <>
-              <p className="cl-eyebrow cl-mt">Step four</p>
-              <h2 className="cl-h2">Ground yourself in the calls</h2>
-              <p className="cl-lede">
-                A realistic sample before you sit down — the kind of review a lead actually has time for.
-                Exactly 3 calls always show the gap; anything beyond that is a real moment where {agent.name}{" "}
-                got it right, not noise.
-              </p>
-              {!observations && (
-                <div className="cl-actions">
-                  <button className="cl-btn cl-ghost" onClick={buildObservations} disabled={obsBusy}>
-                    {obsBusy ? "Listening to the calls…" : "🔎 Pull my call observations"}
-                  </button>
-                </div>
-              )}
-              {obsError && <p className="cl-error">{obsError}</p>}
-              {observations && (
-                <div className="cl-obs">
-                  <p className="cl-obs-summary">
-                    {observations.gapCount} of {observations.totalCalls} observed calls this pay period — {topic.toLowerCase()} missing.
-                  </p>
-                  <ul className="cl-obs-list">
-                    {observations.calls.map((c, i) => (
-                      <li key={i} className={"cl-obs-item" + (c.gap ? " cl-obs-miss" : " cl-obs-strength")}>
-                        <div className="cl-obs-meta">
-                          <span className="cl-obs-tag">{c.gap ? "Miss" : "Strength"}</span>
-                          <span className="cl-obs-date">{c.date || c.period}</span>
-                        </div>
-                        {c.quote && <p className="cl-obs-quote">“{c.quote}”</p>}
-                        {c.note && <p className="cl-obs-note">{c.note}</p>}
-                      </li>
-                    ))}
-                  </ul>
-                  <button className="cl-btn cl-ghost cl-small" onClick={buildObservations} disabled={obsBusy}>
-                    {obsBusy ? "Regenerating…" : "Regenerate"}
-                  </button>
-                  <div className="cl-actions cl-mt">
-                    <button className="cl-btn cl-ghost" onClick={() => exportPracticeCase("key")}>
-                      📄 Download answer key (PDF)
-                    </button>
-                    <button className="cl-btn cl-ghost" onClick={() => exportPracticeCase("handout")}>
-                      📄 Download handout (PDF)
-                    </button>
-                  </div>
-                  <p className="cl-fine">
-                    Use {agent.name} as a ready-made case study instead of building a new one — this snapshots the
-                    account, behaviour and observations exactly as they are right now.
-                  </p>
-                </div>
-              )}
-            </>
-          )}
-
           <div className="cl-actions"><button className="cl-btn cl-go" onClick={begin}>Start the session</button></div>
         </div>
         <aside className="cl-profile">
@@ -2527,10 +2507,53 @@ function Practice({ handoff, onClearHandoff }) {
                     ))}</tbody>
                   </table>
                 </div>
+                <div className="cl-sc-notes-row">
+                  <button className="cl-coachnote-btn" onClick={() => setShowTell(!showTell)}>
+                    {showTell ? "Hide coach note" : "Coach note"}
+                  </button>
+                  {shape && (
+                    <button className="cl-coachnote-btn" onClick={() => { if (!observations && !obsBusy) buildObservations(); setShowObs(!showObs); }} disabled={obsBusy}>
+                      {obsBusy ? "Pulling calls…" : showObs ? "Hide observation details" : "Observation details"}
+                    </button>
+                  )}
+                </div>
                 {card.tell && showTell && <p className="cl-story">{card.tell}</p>}
-                <button className="cl-linkbtn cl-sc-tell" onClick={() => setShowTell(!showTell)}>
-                  {showTell ? "Hide facilitator note" : "Facilitator note"}
-                </button>
+                {obsError && <p className="cl-error">{obsError}</p>}
+                {showObs && observations && (
+                  <div className="cl-obs">
+                    <p className="cl-obs-summary">
+                      {observations.gapCount} of {observations.totalCalls} observed calls this pay period — {topic.toLowerCase()} missing.
+                    </p>
+                    {observations.calls.map((c, i) => (
+                      <div key={i} className={"cl-obs-card" + (c.gap ? " cl-obs-miss" : " cl-obs-strength")}>
+                        <p className="cl-obs-callhead">
+                          Call {i + 1} <span className="cl-obs-tag">{c.gap ? "Miss" : "Strength"}</span>
+                        </p>
+                        <p className="cl-obs-field"><strong>Duration:</strong> {c.durationLabel}</p>
+                        {c.date && <p className="cl-obs-field"><strong>Date:</strong> {c.date}</p>}
+                        {c.summary && <p className="cl-obs-field"><strong>Short Call Summary:</strong> {c.summary}</p>}
+                        {c.behaviorNote && (
+                          <p className="cl-obs-field">
+                            <strong>Behavior Notes:</strong> — {c.behaviorNote.timestamp} customer said, “{c.behaviorNote.customerLine}” agent said, “{c.behaviorNote.agentLine}”
+                          </p>
+                        )}
+                        {c.vocStart && <p className="cl-obs-field"><strong>VOC Start:</strong> {c.vocStart}</p>}
+                        {c.vocEnd && <p className="cl-obs-field"><strong>VOC End:</strong> {c.vocEnd}</p>}
+                      </div>
+                    ))}
+                    <div className="cl-actions">
+                      <button className="cl-btn cl-ghost cl-small" onClick={buildObservations} disabled={obsBusy}>
+                        {obsBusy ? "Regenerating…" : "Regenerate"}
+                      </button>
+                      <button className="cl-btn cl-ghost cl-small" onClick={() => exportPracticeCase("key")}>
+                        📄 Answer key (PDF)
+                      </button>
+                      <button className="cl-btn cl-ghost cl-small" onClick={() => exportPracticeCase("handout")}>
+                        📄 Handout (PDF)
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2703,10 +2726,17 @@ body{padding-top:46px}
     h += "<p class='pg-callmeta'>" + observations.gapCount + " of " + observations.totalCalls +
       " observed calls this pay period \u2014 " + esc(topic.toLowerCase()) + " missing.</p>";
     observations.calls.forEach((c, i) => {
-      h += "<div class='pg-call'><h3>Call " + (i + 1) + " — " + esc(c.date || c.period) + "</h3>";
-      if (c.quote) h += "<p class='pg-line'>\u201c" + esc(c.quote) + "\u201d</p>";
+      h += "<div class='pg-call'><h3>Call " + (i + 1) + " — " + esc(c.date || c.period) + "</h3>" +
+        "<p class='pg-callmeta'>Duration " + esc(c.durationLabel) + "</p>";
+      if (c.summary) h += "<p class='pg-line'>" + esc(c.summary) + "</p>";
+      if (c.behaviorNote) {
+        h += "<p class='pg-line'>" + esc(c.behaviorNote.timestamp) + " — customer said, \u201c" +
+          esc(c.behaviorNote.customerLine) + "\u201d agent said, \u201c" + esc(c.behaviorNote.agentLine) + "\u201d</p>";
+      }
       if (key) {
-        h += "<p class='pg-ans'>" + (c.gap ? "MISS" : "STRENGTH") + (c.note ? " — " + esc(c.note) : "") + "</p>";
+        h += "<p class='pg-ans'>" + (c.gap ? "MISS" : "STRENGTH") +
+          (c.vocStart ? " — VOC Start: " + esc(c.vocStart) : "") +
+          (c.vocEnd ? " · VOC End: " + esc(c.vocEnd) : "") + "</p>";
       } else {
         h += "<div class='pg-blank' style='height:20mm'></div>";
       }
@@ -2887,6 +2917,13 @@ const CSS = `
 .cl-sc-table td { padding: 7px 9px; text-align: center; font-size: 12.5px; background: var(--white); }
 .cl-sc-table td.cl-td-period { text-align: left; font-weight: 700; white-space: nowrap; }
 .cl-sc-tell { margin-top: 10px; font-size: 12px; }
+.cl-sc-notes-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.cl-coachnote-btn {
+  background: var(--red); color: var(--black); border: 0; padding: 8px 16px;
+  font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+}
+.cl-coachnote-btn:hover { background: var(--red-deep); color: var(--white); }
+.cl-coachnote-btn:disabled { opacity: .6; }
 .cl-linkbtn { background: none; border: 0; padding: 0; color: var(--red); text-decoration: underline; font-size: inherit; }
 
 .cl-profile { background: var(--white); border: 1px solid var(--line); overflow: hidden; }
@@ -2958,16 +2995,14 @@ const CSS = `
 
 .cl-obs { margin-top: 14px; }
 .cl-obs-summary { font-size: 13.5px; font-weight: 700; color: var(--ink); background: var(--paper); padding: 9px 13px; margin: 0 0 12px; }
-.cl-obs-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
-.cl-obs-item { border-left: 3px solid var(--line); padding: 8px 12px; background: var(--white); border: 1px solid var(--line); border-left-width: 3px; }
-.cl-obs-item.cl-obs-miss { border-left-color: var(--red); }
-.cl-obs-item.cl-obs-strength { border-left-color: #1F8A4C; }
-.cl-obs-meta { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
-.cl-obs-tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--red); }
-.cl-obs-strength .cl-obs-tag { color: #1F8A4C; }
-.cl-obs-date { font-size: 11px; color: var(--soft); }
-.cl-obs-quote { margin: 0 0 3px; font-size: 13px; font-style: italic; color: var(--ink); }
-.cl-obs-note { margin: 0; font-size: 12px; color: var(--soft); }
+.cl-obs-card { border: 1px solid var(--line); border-left: 3px solid var(--line); padding: 12px 14px; background: var(--white); margin-bottom: 10px; }
+.cl-obs-card.cl-obs-miss { border-left-color: var(--red); }
+.cl-obs-card.cl-obs-strength { border-left-color: #1F8A4C; }
+.cl-obs-callhead { font-family: Anton, sans-serif; font-size: 14px; letter-spacing: .02em; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+.cl-obs-tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--red); border: 1px solid var(--red); padding: 1px 6px; }
+.cl-obs-strength .cl-obs-tag, .cl-obs-card.cl-obs-strength .cl-obs-tag { color: #1F8A4C; border-color: #1F8A4C; }
+.cl-obs-field { margin: 0 0 5px; font-size: 12.5px; color: var(--ink); line-height: 1.5; }
+.cl-obs-field strong { color: var(--black); }
 
 .cl-downloads { display: flex; flex-direction: column; gap: 10px; }
 .cl-dl { display: flex; gap: 16px; align-items: center; text-align: left; background: var(--white); border: 1px solid var(--ink); padding: 16px 18px; }
