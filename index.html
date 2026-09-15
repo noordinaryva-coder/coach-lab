@@ -489,12 +489,20 @@ function CaseStudy({ onCoach }) {
       "- The customer is a real person with a real problem, not a prop. Keep turns short and natural, under 24 words each.\n" +
       "- Sound like this specific account — real product names, screens, policies, timeframes and jargon, not generic filler.\n\n" +
       "OUTPUT\n" +
-      "Return ONLY a JSON array of exactly 3 contact objects, no other text, in this compact shape:\n" +
-      '[{"id":"CN-4471902","date":"a date inside ' + period + '","driver":"the contact reason",' +
-      '"dur":<seconds>,"talk":<seconds>,"hold":<seconds>,"acw":<seconds>,"disp":"Resolved","out":"one line on how it ended",\n' +
-      '  "t":[["00:00","A","what the agent says"],["01:10","C","what the customer says"],["03:20","S","Placed customer on hold — 1:20"]],\n' +
-      '  "e":[["03:20","miss","short KSB name","what this moment shows"]]}, ...]\n' +
-      'Speakers are "A" for agent, "C" for customer, "S" for system. Between 10 and 18 turns per contact, exactly 3 evidence entries per contact.';
+      "Write all 3 contacts as plain, readable transcripts — no JSON, no code block, just formatted text a coach " +
+      "can read straight off the page. Use exactly this layout for each contact:\n\n" +
+      "CONTACT 1 — CN-XXXXXXX\n" +
+      "[date] · " + resolvedDriver + " · Duration [m:ss] · Talk [m:ss] · Hold [m:ss] · ACW [m:ss] · [Disposition]\n\n" +
+      "[00:00] AGENT: what the agent says\n" +
+      "[00:18] CUSTOMER: what the customer says\n" +
+      "[01:31] SYSTEM: Agent searching order system — 40 seconds of silence\n" +
+      "... every turn, in order, same style ...\n\n" +
+      "OUTCOME: one line on how the contact ended\n\n" +
+      "EVIDENCE (facilitator notes — exactly 3 per contact):\n" +
+      "[mm:ss] MISS — short KSB name: what this moment shows\n" +
+      "[mm:ss] STRENGTH — short KSB name: what this moment shows\n" +
+      "(every evidence timestamp must exactly match one of the turn timestamps above it)\n\n" +
+      "Separate the 3 contacts with a line of dashes (---). Between 10 and 18 turns per contact.";
   }
 
   async function copyTranscriptPrompt() {
