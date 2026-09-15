@@ -441,6 +441,67 @@ function CaseStudy({ onCoach }) {
     return metrics.rows[metrics.rows.length - 1][i];
   }
 
+  const [promptCopied, setPromptCopied] = useState(false);
+
+  function buildTranscriptPrompt() {
+    const table = metrics.columns.join(" | ") + "\n" + metrics.rows.map((r) => r.join(" | ")).join("\n");
+    const ahtRaw = toSecs(latestVal("^AHT|Handle"));
+    const aht = ahtRaw || 600;
+    const hold = toSecs(latestVal("Hold")) || 0;
+    const acw = toSecs(latestVal("ACW")) || 0;
+    const talk = toSecs(latestVal("Talk")) || Math.max(60, aht - hold - acw);
+    const convo = talk + hold;
+    const period = metrics.rows[metrics.rows.length - 1][0];
+    const resolvedDriver = p.driver || "the account's most common contact reason";
+    const SPREAD = [0.6, 1.0, 1.42];
+
+    return "You write realistic contact centre " + (p.channel === "Chat" ? "chat" : "call") + " transcripts that serve " +
+      "as evidence in a coaching case study. The transcript is the proof of the behaviour — a facilitator must be " +
+      "able to point at a timestamp and say 'there it is'.\n\n" +
+      "CASE CONTEXT\n" +
+      "Account: " + accountLine + "\n" +
+      "Agent: " + p.name + ", tenure " + p.tenure + ", DISC " + p.disc + (p.discNote ? " (" + p.discNote + ")" : "") + "\n" +
+      "Contact driver for all three contacts: " + resolvedDriver + "\n" +
+      "Problem KPM: " + p.kpm + "\nProblem behaviour: " + p.behaviour + "\nPay period: " + period + "\n\n" +
+      "PERFORMANCE TREND (the transcripts must be consistent with this table)\n" + table + "\n\n" +
+      "HARD CONSTRAINTS\n" +
+      "- Handle time is talk + hold + after-call work. The CONVERSATION you write covers talk + hold only; wrap " +
+      "happens after the customer is gone and is never in the transcript.\n" +
+      "- Write exactly THREE contacts. Each has its OWN target length — one shorter, one typical, one long — because " +
+      "three calls at identical length read as fabricated. Targets: contact 1 ≈ " + fmtSecs(Math.round(convo * SPREAD[0])) +
+      ", contact 2 ≈ " + fmtSecs(Math.round(convo * SPREAD[1])) + ", contact 3 ≈ " + fmtSecs(Math.round(convo * SPREAD[2])) +
+      " of conversation — averaging out near " + fmtSecs(convo) + ". Make contact 3 the clearest example of the problem behaviour.\n" +
+      "- Do NOT reach the target length by writing more turns. Reach it the way a real slow call gets slow: leave " +
+      "real gaps between timestamps and account for them with System lines — 'Agent searching order system — 40 " +
+      "seconds of silence', 'Placed customer on hold — 1:20', 'Agent re-verifying account details — 35 seconds'. " +
+      "Gaps of 30 to 90 seconds between turns are normal on a call this long.\n" +
+      "- Hold must total roughly " + hold + " seconds across each contact. If hold is near zero, carry the length " +
+      "through dead air and over-explaining instead of inventing holds.\n" +
+      "- Every contact is dated inside the pay period " + period + ".\n" +
+      "- Every evidence timestamp must be copied exactly from a turn you wrote.\n" +
+      "- The problem behaviour must be visibly, specifically present — demonstrated in what the agent says, never described.\n" +
+      "- Include at least one genuine strength per contact so it is not a hit piece.\n" +
+      "- The customer is a real person with a real problem, not a prop. Keep turns short and natural, under 24 words each.\n" +
+      "- Sound like this specific account — real product names, screens, policies, timeframes and jargon, not generic filler.\n\n" +
+      "OUTPUT\n" +
+      "Return ONLY a JSON array of exactly 3 contact objects, no other text, in this compact shape:\n" +
+      '[{"id":"CN-4471902","date":"a date inside ' + period + '","driver":"the contact reason",' +
+      '"dur":<seconds>,"talk":<seconds>,"hold":<seconds>,"acw":<seconds>,"disp":"Resolved","out":"one line on how it ended",\n' +
+      '  "t":[["00:00","A","what the agent says"],["01:10","C","what the customer says"],["03:20","S","Placed customer on hold — 1:20"]],\n' +
+      '  "e":[["03:20","miss","short KSB name","what this moment shows"]]}, ...]\n' +
+      'Speakers are "A" for agent, "C" for customer, "S" for system. Between 10 and 18 turns per contact, exactly 3 evidence entries per contact.';
+  }
+
+  async function copyTranscriptPrompt() {
+    try {
+      await navigator.clipboard.writeText(buildTranscriptPrompt());
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2500);
+    } catch (e) {
+      setError("Couldn't copy automatically — your browser may be blocking clipboard access.");
+    }
+  }
+
   async function buildScripts() {
     setBusy("scripts"); setError(""); setProg(0);
     setScripts([]); setAnswers([]);                    // downstream state is now stale
@@ -716,9 +777,9 @@ function CaseStudy({ onCoach }) {
   function exportHTML(mode) {
     const html = buildPrintHTML({ p, accountLine, metrics, scripts, answers, check, mode });
     const safe = (p.name || "case").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const suffix = mode === "key" ? "answer-key" : mode === "early" ? "metrics-profile" : "handout";
     try {
-      download(new Blob([html], { type: "text/html" }),
-        safe + "-" + (mode === "key" ? "answer-key" : "handout") + "-print-me.html");
+      download(new Blob([html], { type: "text/html" }), safe + "-" + suffix + "-print-me.html");
     } catch (e) {
       setError("Download was blocked by the browser. Try the print buttons instead.");
     }
@@ -895,6 +956,21 @@ function CaseStudy({ onCoach }) {
             </button>
           </div>
           {busy === "scripts" && <Progress n={prog} total={3} />}
+          <div className="cl-rule" />
+          <p className="cl-eyebrow">If generation keeps failing or drifting from the numbers</p>
+          <div className="cl-actions">
+            <button className="cl-btn cl-ghost" onClick={copyTranscriptPrompt}>
+              {promptCopied ? "Copied ✓" : "📋 Copy prompt for ChatGPT"}
+            </button>
+            <button className="cl-btn cl-ghost" onClick={() => exportHTML("early")}>
+              Download metrics &amp; profile (PDF)
+            </button>
+          </div>
+          <p className="cl-fine">
+            The ChatGPT prompt carries over the profile, behaviour and this exact metrics table, so whatever it
+            writes still matches what's on screen. The PDF is a safety net — if transcript generation fails after
+            this point, you still have a polished export of the two steps that already worked.
+          </p>
         </div>
       )}
 
@@ -1310,10 +1386,11 @@ function PrintDoc({ p, accountLine, metrics, scripts, answers, check, mode }) {
 }
 
 function buildPrintHTML({ p, accountLine, metrics, scripts, answers, check, mode }) {
-  const key = mode === "key";
+  const key = mode === "key" || mode === "early";
+  const isEarly = mode === "early";
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   let h = "<!doctype html><html><head><meta charset='utf-8'><title>" + esc(p.name) + " — " +
-    (key ? "Answer Key" : "Handout") + "</title>" +
+    (isEarly ? "Metrics & Profile" : key ? "Answer Key" : "Handout") + "</title>" +
     "<link href='https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;500;600;700&display=swap' rel='stylesheet'>" +
     "<style>" + PRINT_CSS + `
 .printbar{position:fixed;top:0;left:0;right:0;background:#101010;color:#fff;padding:10px 16px;
@@ -1330,7 +1407,7 @@ body{padding-top:46px}
   h += "<section class='pg pg-cover'><div class='pg-slashbig'></div>" +
     "<p class='pg-kicker'>Coaching case study</p><h1>" + esc(p.name) + "</h1>" +
     "<p class='pg-sub'>" + esc(accountLine) + "</p><p class='pg-badge'>" +
-    (key ? "Facilitator answer key" : "Learner handout") + "</p>" +
+    (isEarly ? "Metrics & profile only \u2014 transcripts not yet generated" : key ? "Facilitator answer key" : "Learner handout") + "</p>" +
     "<p class='pg-disclaimer'>Internal training material. The teammate, the contacts and the performance " +
     "data in this document are illustrative and do not depict real people or real customer interactions.</p></section>";
 
@@ -1345,6 +1422,8 @@ body{padding-top:46px}
   h += "</tbody></table>";
   if (key && metrics.story) h += "<p class='pg-ans'>" + esc(metrics.story) + "</p>";
   h += "</section>";
+
+  if (isEarly) { h += "</body></html>"; return h; }
 
   h += "<section class='pg'><h2>Contact Evidence</h2>";
   if (key && check) {
@@ -1606,6 +1685,20 @@ const SHAPES = {
 
 const PERIODS = ["Aug 16-31", "Sept 1-15", "Sept 16-30"];
 
+/* Observed-call evidence rides on the SAME trajectory data that already drives
+   each persona's scorecard — no separate authoring needed. The rule (fixed by
+   design, not computed): exactly 3 calls always show the behaviour missing.
+   Any period where this persona's deviation sits well below their own average
+   is a real, trajectory-consistent moment where they got it right — that
+   becomes an extra observed call, capped at 2 so the total never exceeds 5
+   (a realistic ceiling for what a lead can review before one conversation). */
+function exceptionPeriods(traj) {
+  const avg = (traj[0] + traj[1] + traj[2]) / 3;
+  if (avg <= 0.4) return []; // the whole trend is already mild — no standout "good" moment to carve out
+  const threshold = avg * 0.55;
+  return traj.map((v, i) => ({ i, v })).filter(({ v }) => v < threshold).map(({ i }) => i).slice(0, 2);
+}
+
 function fmtMetric(key, val) {
   const m = METRICS[key];
   if (!m) return String(val);
@@ -1792,9 +1885,13 @@ function Practice({ handoff, onClearHandoff }) {
   const [score, setScore] = useState(null);
   const [scoring, setScoring] = useState(false);
   const [error, setError] = useState("");
+  const [observations, setObservations] = useState(null);
+  const [obsBusy, setObsBusy] = useState(false);
+  const [obsError, setObsError] = useState("");
   const endRef = useRef(null);
 
   useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({ behavior: "smooth" }); }, [turns, busy]);
+  useEffect(() => { setObservations(null); setObsError(""); }, [agent.id, program, behaviour]);
 
   const isUncoachable = agent.band === "none";
   const activeRubric = isUncoachable ? [...RUBRIC, LIMIT_DIM]
@@ -1813,6 +1910,62 @@ function Practice({ handoff, onClearHandoff }) {
   const cardText = card
     ? card.cols.join(" | ") + "\n" + card.rows.map((r) => r.join(" | ")).join("\n")
     : "";
+
+  const shape = SHAPES[agent.id]; // only exists for the 13 built-in personas, not a case-study handoff
+
+  async function buildObservations() {
+    if (!shape || !card) return;
+    setObsBusy(true); setObsError("");
+    try {
+      const exceptions = exceptionPeriods(shape.traj);
+      const gapIdx = [0, 1, 2].filter((i) => !exceptions.includes(i));
+      const totalCalls = 3 + exceptions.length;
+      const gapLabels = gapIdx.map((i) => PERIODS[i]);
+      const exceptionLabels = exceptions.map((i) => PERIODS[i]);
+      const j = await callJSON({
+        system:
+          "You write short, specific call-observation notes for a coaching case study — like a team leader's own " +
+          "notebook after listening to calls, before sitting down to coach someone.\n" +
+          "STRUCTURE (follow exactly):\n" +
+          "- Write exactly " + totalCalls + " call entries.\n" +
+          "- Exactly 3 of them show the behaviour MISSING — pull only from these pay periods: " + gapLabels.join(", ") + ".\n" +
+          (exceptions.length
+            ? "- The remaining " + exceptions.length + " call(s) show the behaviour actually happening WELL — pull " +
+              "only from these pay periods: " + exceptionLabels.join(", ") + ". This is a real moment, not a fluke " +
+              "— capture specifically what the agent did right.\n"
+            : "") +
+          "- Every note is SPECIFIC: what the customer needed or said, what the agent actually said or did (or " +
+          "didn't). Plain, spoken language a coach would use out loud, one short sentence.\n" +
+          "- Include a short near-verbatim line of what the agent said on the call — under 16 words.\n" +
+          "- Vary the calls — different customer situations, different specific moments, never the same sentence reworded.\n" +
+          "Context:\nAgent: " + agent.name + " — " + agent.brief + "\nAccount: " + programName +
+          "\nBehaviour focus: " + topic + (card.behaviour && card.behaviour.note ? " — " + card.behaviour.note : "") +
+          "\nWhy this pattern happens: " + (shape.tell || "") + "\n" +
+          'Return ONLY JSON: {"calls":[{"period":"one of the period labels above","date":"a specific date inside ' +
+          'that period","gap":true|false,"quote":"under 16 words, what the agent actually said","note":"under 18 ' +
+          'words, what this moment shows"}]}\nExactly ' + totalCalls + ' entries total, in chronological order by period.',
+        messages: [{ role: "user", content: "Generate the call observations now." }],
+        maxTokens: 900,
+      });
+      const calls = (j.calls || []).slice(0, totalCalls);
+      const gapCount = calls.filter((c) => c.gap).length;
+      setObservations({ calls, totalCalls, gapCount });
+    } catch (e) {
+      setObsError(e.message || "Could not generate the call observations. Try again.");
+    }
+    setObsBusy(false);
+  }
+
+  function exportPracticeCase(mode) {
+    if (!observations || !card) return;
+    const html = buildPracticeCaseHTML({ agent, programName, topic, card, observations, mode });
+    const safe = agent.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    try {
+      download(new Blob([html], { type: "text/html" }), safe + "-" + (mode === "key" ? "answer-key" : "handout") + "-print-me.html");
+    } catch (e) {
+      setObsError("Download was blocked by the browser.");
+    }
+  }
 
   const system =
     "You are roleplaying a contact centre agent in a one-to-one coaching session. Your name is " + agent.name +
@@ -2249,6 +2402,60 @@ function Practice({ handoff, onClearHandoff }) {
             </p>
           )}
 
+          {shape && (
+            <>
+              <p className="cl-eyebrow cl-mt">Step four</p>
+              <h2 className="cl-h2">Ground yourself in the calls</h2>
+              <p className="cl-lede">
+                A realistic sample before you sit down — the kind of review a lead actually has time for.
+                Exactly 3 calls always show the gap; anything beyond that is a real moment where {agent.name}{" "}
+                got it right, not noise.
+              </p>
+              {!observations && (
+                <div className="cl-actions">
+                  <button className="cl-btn cl-ghost" onClick={buildObservations} disabled={obsBusy}>
+                    {obsBusy ? "Listening to the calls…" : "🔎 Pull my call observations"}
+                  </button>
+                </div>
+              )}
+              {obsError && <p className="cl-error">{obsError}</p>}
+              {observations && (
+                <div className="cl-obs">
+                  <p className="cl-obs-summary">
+                    {observations.gapCount} of {observations.totalCalls} observed calls this pay period — {topic.toLowerCase()} missing.
+                  </p>
+                  <ul className="cl-obs-list">
+                    {observations.calls.map((c, i) => (
+                      <li key={i} className={"cl-obs-item" + (c.gap ? " cl-obs-miss" : " cl-obs-strength")}>
+                        <div className="cl-obs-meta">
+                          <span className="cl-obs-tag">{c.gap ? "Miss" : "Strength"}</span>
+                          <span className="cl-obs-date">{c.date || c.period}</span>
+                        </div>
+                        {c.quote && <p className="cl-obs-quote">“{c.quote}”</p>}
+                        {c.note && <p className="cl-obs-note">{c.note}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                  <button className="cl-btn cl-ghost cl-small" onClick={buildObservations} disabled={obsBusy}>
+                    {obsBusy ? "Regenerating…" : "Regenerate"}
+                  </button>
+                  <div className="cl-actions cl-mt">
+                    <button className="cl-btn cl-ghost" onClick={() => exportPracticeCase("key")}>
+                      📄 Download answer key (PDF)
+                    </button>
+                    <button className="cl-btn cl-ghost" onClick={() => exportPracticeCase("handout")}>
+                      📄 Download handout (PDF)
+                    </button>
+                  </div>
+                  <p className="cl-fine">
+                    Use {agent.name} as a ready-made case study instead of building a new one — this snapshots the
+                    account, behaviour and observations exactly as they are right now.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+
           <div className="cl-actions"><button className="cl-btn cl-go" onClick={begin}>Start the session</button></div>
         </div>
         <aside className="cl-profile">
@@ -2445,6 +2652,69 @@ function Practice({ handoff, onClearHandoff }) {
       </aside>
     </div>
   );
+}
+
+/* Turns a Practice persona's current selection (account + behaviour + the
+   observations the coach pulled) into the same two-flavour PDF pack the
+   Case Study Builder produces — for when a built-in persona is good enough
+   to use as-is, instead of building a new case from scratch. */
+function buildPracticeCaseHTML({ agent, programName, topic, card, observations, mode }) {
+  const key = mode === "key";
+  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const accountLine = programName + " · " + topic;
+  let h = "<!doctype html><html><head><meta charset='utf-8'><title>" + esc(agent.name) + " — " +
+    (key ? "Answer Key" : "Handout") + "</title>" +
+    "<link href='https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;500;600;700&display=swap' rel='stylesheet'>" +
+    "<style>" + PRINT_CSS + `
+.printbar{position:fixed;top:0;left:0;right:0;background:#101010;color:#fff;padding:10px 16px;
+  font-size:13px;font-family:Archivo,sans-serif;z-index:99;display:flex;gap:12px;align-items:center}
+.printbar b{font-weight:700}
+.printbar button{background:#C0202A;color:#fff;border:0;padding:7px 14px;font:inherit;font-weight:700;
+  text-transform:uppercase;letter-spacing:.06em;font-size:11px;cursor:pointer}
+body{padding-top:46px}
+@media print{.printbar{display:none}body{padding-top:0}}
+` + "</style></head><body>" +
+    "<div class='printbar'><b>Ready to save.</b> Press Ctrl+P (Cmd+P on Mac) and choose Save as PDF." +
+    "<button onclick='window.print()'>Print now</button></div>";
+
+  h += "<section class='pg pg-cover'><div class='pg-slashbig'></div>" +
+    "<p class='pg-kicker'>Coaching case study</p><h1>" + esc(agent.name) + "</h1>" +
+    "<p class='pg-sub'>" + esc(accountLine) + "</p><p class='pg-badge'>" +
+    (key ? "Facilitator answer key" : "Learner handout") + "</p>" +
+    "<p class='pg-disclaimer'>Internal training material, generated from a Coach Lab practice scenario. The " +
+    "teammate, calls and performance data in this document are illustrative and do not depict a real person or " +
+    "real customer interactions.</p></section>";
+
+  h += "<section class='pg'><h2>Teammate Profile</h2><table class='pg-meta'><tbody>";
+  [["Name", agent.name], ["DISC style", agent.disc || "—"],
+   ["Coachability", (BANDS.find((b) => b.id === agent.band) || {}).label || ""],
+   ["Profile", agent.tag], ["Background", agent.brief]]
+    .forEach(([k, v]) => { h += "<tr><td>" + esc(k) + "</td><td>" + esc(v) + "</td></tr>"; });
+  h += "</tbody></table><h2>Performance Trend Report</h2><table class='pg-table'><thead><tr>";
+  card.cols.forEach((c) => (h += "<th>" + esc(c) + "</th>"));
+  h += "</tr></thead><tbody>";
+  card.rows.forEach((r) => { h += "<tr>"; r.forEach((c) => (h += "<td>" + esc(c) + "</td>")); h += "</tr>"; });
+  h += "</tbody></table>";
+  if (key && card.tell) h += "<p class='pg-ans'>" + esc(card.tell) + "</p>";
+  h += "</section>";
+
+  h += "<section class='pg'><h2>Call Observations</h2>";
+  if (observations && observations.calls && observations.calls.length) {
+    h += "<p class='pg-callmeta'>" + observations.gapCount + " of " + observations.totalCalls +
+      " observed calls this pay period \u2014 " + esc(topic.toLowerCase()) + " missing.</p>";
+    observations.calls.forEach((c, i) => {
+      h += "<div class='pg-call'><h3>Call " + (i + 1) + " — " + esc(c.date || c.period) + "</h3>";
+      if (c.quote) h += "<p class='pg-line'>\u201c" + esc(c.quote) + "\u201d</p>";
+      if (key) {
+        h += "<p class='pg-ans'>" + (c.gap ? "MISS" : "STRENGTH") + (c.note ? " — " + esc(c.note) : "") + "</p>";
+      } else {
+        h += "<div class='pg-blank' style='height:20mm'></div>";
+      }
+      h += "</div>";
+    });
+  }
+  h += "</section></body></html>";
+  return h;
 }
 
 /* ============================ PRINT CSS =========================== */
@@ -2685,6 +2955,19 @@ const CSS = `
 .cl-ann { display: block; margin-top: 5px; font-size: 12px; font-style: normal; padding: 6px 10px; border-left: 3px solid var(--blue); background: #F7F9FC; color: var(--blue); }
 .cl-ann.cl-miss { border-left-color: var(--red); background: var(--red-wash); color: var(--red-deep); }
 .cl-outcome { font-size: 13px; color: var(--soft); font-style: italic; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
+
+.cl-obs { margin-top: 14px; }
+.cl-obs-summary { font-size: 13.5px; font-weight: 700; color: var(--ink); background: var(--paper); padding: 9px 13px; margin: 0 0 12px; }
+.cl-obs-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.cl-obs-item { border-left: 3px solid var(--line); padding: 8px 12px; background: var(--white); border: 1px solid var(--line); border-left-width: 3px; }
+.cl-obs-item.cl-obs-miss { border-left-color: var(--red); }
+.cl-obs-item.cl-obs-strength { border-left-color: #1F8A4C; }
+.cl-obs-meta { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.cl-obs-tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--red); }
+.cl-obs-strength .cl-obs-tag { color: #1F8A4C; }
+.cl-obs-date { font-size: 11px; color: var(--soft); }
+.cl-obs-quote { margin: 0 0 3px; font-size: 13px; font-style: italic; color: var(--ink); }
+.cl-obs-note { margin: 0; font-size: 12px; color: var(--soft); }
 
 .cl-downloads { display: flex; flex-direction: column; gap: 10px; }
 .cl-dl { display: flex; gap: 16px; align-items: center; text-align: left; background: var(--white); border: 1px solid var(--ink); padding: 16px 18px; }
