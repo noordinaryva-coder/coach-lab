@@ -1892,6 +1892,7 @@ function Practice({ handoff, onClearHandoff }) {
   const [cardOpen, setCardOpen] = useState(true);
   const [showTell, setShowTell] = useState(false);
   const [showObs, setShowObs] = useState(false);
+  const [copiedCallIdx, setCopiedCallIdx] = useState(null);
   const [started, setStarted] = useState(false);
   const [turns, setTurns] = useState([]);
   const [draft, setDraft] = useState("");
@@ -2006,6 +2007,50 @@ function Practice({ handoff, onClearHandoff }) {
       download(new Blob([html], { type: "text/html" }), safe + "-" + (mode === "key" ? "answer-key" : "handout") + "-print-me.html");
     } catch (e) {
       setObsError("Download was blocked by the browser.");
+    }
+  }
+
+  function buildFullCallPrompt(c) {
+    const bn = c.behaviorNote || {};
+    return "Write the FULL call transcript for this single contact — every turn, not a summary. This needs to " +
+      "read like a real transcript a coach could sit down and listen to end to end.\n\n" +
+      "CONTEXT\n" +
+      "Account: " + programName + "\nAgent: " + agent.name + " — " + agent.brief +
+      "\nBehaviour focus: " + topic + (card.behaviour && card.behaviour.note ? " — " + card.behaviour.note : "") + "\n\n" +
+      "WHAT'S ALREADY ESTABLISHED — the full transcript must be consistent with this, not contradict it:\n" +
+      "Date: " + (c.date || c.period) + "\nDuration: " + c.durationLabel + " (the final timestamp must land here, not before)\n" +
+      "Short summary: " + (c.summary || "") + "\n" +
+      "The behaviour is " + (c.gap ? "MISSING" : "PRESENT and done well") + " on this call.\n" +
+      (bn.timestamp
+        ? "Known moment at " + bn.timestamp + " — customer said, \"" + (bn.customerLine || "") + "\" and the agent " +
+          "said, \"" + (bn.agentLine || "") + "\" — this exact exchange must appear at this exact timestamp in the " +
+          "full transcript, word for word.\n"
+        : "") +
+      (c.vocStart && c.vocEnd
+        ? "Customer sentiment starts " + c.vocStart + " and ends " + c.vocEnd + " — the conversation should " +
+          "plausibly move that way by how it unfolds.\n"
+        : "") +
+      "\nHARD CONSTRAINTS\n" +
+      "- Write EVERY turn from 00:00 to the final timestamp — do not skip ahead or summarize partway through.\n" +
+      "- The known moment above must appear verbatim, at its exact timestamp.\n" +
+      "- Leave real gaps between timestamps for a call this long — use SYSTEM lines for dead air, holds, system " +
+      "checks (\"Agent searching account details — 35 seconds of silence\").\n" +
+      "- The customer is a real person with a real problem, not a prop. Natural, short turns.\n" +
+      "- Sound like this specific account — real product names, screens, policies, timeframes, jargon, not generic filler.\n\n" +
+      "OUTPUT\n" +
+      "Plain readable text, no JSON, no code block:\n\n" +
+      "CONTACT — [invent a contact ID]\n" +
+      (c.date || c.period) + " · Duration " + c.durationLabel + " · [Disposition]\n\n" +
+      "[00:00] AGENT: ...\n[00:18] CUSTOMER: ...\n...every turn, in order...\n\nOUTCOME: one line on how it ended";
+  }
+
+  async function copyFullCallPrompt(c, idx) {
+    try {
+      await navigator.clipboard.writeText(buildFullCallPrompt(c));
+      setCopiedCallIdx(idx);
+      setTimeout(() => setCopiedCallIdx(null), 2500);
+    } catch (e) {
+      setObsError("Couldn't copy automatically — your browser may be blocking clipboard access.");
     }
   }
 
@@ -2547,6 +2592,9 @@ function Practice({ handoff, onClearHandoff }) {
                         )}
                         {c.vocStart && <p className="cl-obs-field"><strong>VOC Start:</strong> {c.vocStart}</p>}
                         {c.vocEnd && <p className="cl-obs-field"><strong>VOC End:</strong> {c.vocEnd}</p>}
+                        <button className="cl-btn cl-ghost cl-small cl-obs-callprompt" onClick={() => copyFullCallPrompt(c, i)}>
+                          {copiedCallIdx === i ? "Copied ✓" : "📋 Copy prompt for full call"}
+                        </button>
                       </div>
                     ))}
                     <div className="cl-actions">
@@ -3041,6 +3089,7 @@ const CSS = `
 .cl-obs-strength .cl-obs-tag, .cl-obs-card.cl-obs-strength .cl-obs-tag { color: #1F8A4C; border-color: #1F8A4C; }
 .cl-obs-field { margin: 0 0 5px; font-size: 12.5px; color: var(--ink); line-height: 1.5; }
 .cl-obs-field strong { color: var(--black); }
+.cl-obs-callprompt { margin-top: 6px; }
 
 .cl-downloads { display: flex; flex-direction: column; gap: 10px; }
 .cl-dl { display: flex; gap: 16px; align-items: center; text-align: left; background: var(--white); border: 1px solid var(--ink); padding: 16px 18px; }
